@@ -19,5 +19,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "ObsidianCapture"
+rootProject.name = "MarkdownCapture"
 include(":app")

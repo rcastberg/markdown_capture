@@ -1,4 +1,4 @@
-# Obsidian Capture — Technical Overview
+# Markdown Capture — Technical Overview
 
 > **Keep this file up to date with every significant change to the project.**
 
@@ -21,7 +21,7 @@ MainActivity
 - `Camera` — live camera preview, capture button, zoom/lens controls, Capture/Detail/Transcribe tab row
 - `Settings` — provider API keys (multi-provider), per-tab model/prompt/token config, filename model, general
 - `Processing` — progress indicator (used only for `resubmit`; normal captures run in background)
-- `ViewCapture` — read-only view of a saved capture record
+- `ViewCapture` — rendered markdown view of a saved capture record (inline images, share as MD/PDF)
 - `Error` — shows file errors with retry/retake options (only from `resubmit`)
 
 ## Source Files
@@ -38,7 +38,10 @@ MainActivity
 | `ui/CameraScreen.kt` | Camera preview, TabRow+HorizontalPager, pinch-zoom, lens+zoom group |
 | `ui/SettingsScreen.kt` | API Keys section, per-tab sections, filename model, general settings |
 | `ui/ProcessingScreen.kt` | Spinner with step label |
-| `ui/ResultScreen.kt` / `HistorySheet.kt` / `ErrorScreen.kt` | Supporting screens |
+| `ui/ResultScreen.kt` | `CaptureDetailScreen` — rendered/raw toggle, share as MD and PDF |
+| `ui/MarkdownViewer.kt` | `parseMarkdown`, `RenderedMarkdown` composable, SAF image loader |
+| `ui/PdfExport.kt` | `generateAndSharePdf` (PdfDocument API), `shareMarkdownFile` (FileProvider) |
+| `ui/HistorySheet.kt` / `ErrorScreen.kt` | Supporting screens |
 | `ui/theme/Theme.kt` | Material3 theme |
 
 ## AI Provider Integration

@@ -4,11 +4,11 @@ plugins {
 }
 
 android {
-    namespace = "org.castberg.obsidiancapture"
+    namespace = "org.castberg.markdowncapture"
     compileSdk = 36
 
     defaultConfig {
-        applicationId = "org.castberg.obsidiancapture"
+        applicationId = "org.castberg.markdowncapture"
         minSdk = 26
         targetSdk = 36
         versionCode = 1
