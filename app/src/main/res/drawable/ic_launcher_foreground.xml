@@ -4,16 +4,14 @@
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
-    <!-- Camera body -->
+    <!-- Camera body with circular lens opening (evenOdd punches out the lens circle) -->
     <path
         android:fillColor="#FFFFFF"
-        android:pathData="M84,42H72l-8-12H44l-8,12H24c-2.2,0-4,1.8-4,4v32c0,2.2 1.8,4 4,4h60c2.2,0 4-1.8 4-4V46C88,43.8 86.2,42 84,42z" />
-    <!-- Lens outer ring -->
-    <path
-        android:fillColor="#FFFFFF"
-        android:pathData="M54,74c-8.8,0-16-7.2-16-16s7.2-16 16-16s16,7.2 16,16S62.8,74 54,74z" />
-    <!-- Lens inner -->
-    <path
-        android:fillColor="#5850D6"
-        android:pathData="M54,50c-4.4,0-8,3.6-8,8s3.6,8 8,8s8-3.6 8-8S58.4,50 54,50z" />
+        android:fillType="evenOdd"
+        android:pathData="M84,42H72l-8-12H44l-8,12H24c-2.2,0-4,1.8-4,4v32c0,2.2 1.8,4 4,4h60c2.2,0 4-1.8 4-4V46C88,43.8 86.2,42 84,42z M40,60A14,14 0 1,0 68,60A14,14 0 1,0 40,60z" />
+    <!-- Markdown # symbol inside lens (white on dark background showing through) -->
+    <path android:fillColor="#FFFFFF" android:pathData="M46,56L62,56L62,59L46,59Z"/>
+    <path android:fillColor="#FFFFFF" android:pathData="M46,61L62,61L62,64L46,64Z"/>
+    <path android:fillColor="#FFFFFF" android:pathData="M49.5,52L52.5,52L52.5,68L49.5,68Z"/>
+    <path android:fillColor="#FFFFFF" android:pathData="M55.5,52L58.5,52L58.5,68L55.5,68Z"/>
 </vector>
