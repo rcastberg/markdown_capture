@@ -39,6 +39,8 @@ All processing happens in the background — the camera stays ready for the next
 
 Install the APK, or open the project in Android Studio and run it directly.
 
+Tagged releases on GitHub carry a signed `markdown-capture.apk` for sideloading and a `markdown-capture.aab` for Google Play.
+
 ### First launch
 
 1. Open the app and grant camera and location permissions
