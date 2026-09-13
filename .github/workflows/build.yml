@@ -65,11 +65,11 @@ jobs:
           set -euo pipefail
           echo "${KEYSTORE_BASE64}" | base64 -d > markdown-capture-release.jks
 
-      # Fail in seconds with a precise message rather than minutes into the build with a
-      # generic "Given final block not properly padded". `-certreq` with an explicit
-      # -keypass is used for the key check because keytool's `-importkeystore` silently
-      # falls back to the *store* password first and so passed with a wrong KEY_PASSWORD.
-      - name: Check the keystore passwords
+      # Fail in seconds with a precise message for the store password and alias. KEY_PASSWORD
+      # is deliberately NOT checked here: on a PKCS12 keystore keytool ignores -keypass and
+      # uses the store password (both -importkeystore and -certreq gave false passes with a
+      # wrong KEY_PASSWORD on 2026-09-13). apksigner below is the only real key-password test.
+      - name: Check the keystore password and alias
         if: steps.signing.outputs.available == 'true'
         env:
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
@@ -83,12 +83,7 @@ jobs:
           if ! keytool -list -keystore markdown-capture-release.jks -storepass "$KEYSTORE_PASSWORD" -alias "$KEY_ALIAS" >/dev/null 2>&1; then
             echo "::error::KEY_ALIAS '$KEY_ALIAS' is not in the keystore."; exit 1
           fi
-          if ! keytool -certreq -keystore markdown-capture-release.jks -storepass "$KEYSTORE_PASSWORD" \
-                -alias "$KEY_ALIAS" -keypass "$KEY_PASSWORD" -file /tmp/check.csr >/dev/null 2>&1; then
-            echo "::error::KEY_PASSWORD does not unlock key '$KEY_ALIAS' (store password and alias are fine). For a keytool-made PKCS12 keystore it must equal KEYSTORE_PASSWORD."; exit 1
-          fi
-          rm -f /tmp/check.csr
-          echo "Keystore, alias and both passwords check out."
+          echo "Keystore password and alias check out."
           # Lengths only — never the values. Byte count != char count means non-ASCII.
           for v in KEYSTORE_PASSWORD KEY_PASSWORD; do
             b=$(printf %s "${!v}" | wc -c); c=$(printf %s "${!v}" | wc -m)
@@ -120,9 +115,12 @@ jobs:
           set -euo pipefail
           BT=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)
           "$BT/zipalign" -f -p 4 app/build/outputs/apk/release/app-release-unsigned.apk aligned.apk
-          "$BT/apksigner" sign --ks markdown-capture-release.jks --ks-key-alias "$KEY_ALIAS" \
-            --ks-pass env:KEYSTORE_PASSWORD --key-pass env:KEY_PASSWORD \
-            --out markdown-capture.apk aligned.apk
+          if ! "$BT/apksigner" sign --ks markdown-capture-release.jks --ks-key-alias "$KEY_ALIAS" \
+                --ks-pass env:KEYSTORE_PASSWORD --key-pass env:KEY_PASSWORD \
+                --out markdown-capture.apk aligned.apk; then
+            echo "::error::apksigner could not unlock key '$KEY_ALIAS' with KEY_PASSWORD (the store password and alias were verified above). For a PKCS12 keystore the key password is normally identical to KEYSTORE_PASSWORD — set KEY_PASSWORD to the same value."
+            exit 1
+          fi
           rm -f aligned.apk
 
       # Prove the APK really is signed before anything is published — an unsigned
