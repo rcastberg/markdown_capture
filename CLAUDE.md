@@ -212,3 +212,17 @@ Three repo secrets are needed (Settings → Secrets and variables → Actions):
 Three guards worth keeping: a keytool step checks the store password and alias within seconds and names the wrong secret (note that keytool cannot check a *distinct* key password on PKCS12 — it ignores `-keypass` and uses the store password); the job runs `apksigner verify` before publishing (a broken secret would otherwise silently ship an uninstallable APK); and the keystore is shredded in an `if: always()` step so a failure part-way through leaves no key material on the runner.
 
 **Bump `versionCode` in `app/build.gradle.kts` before tagging** — Android refuses a downgrade, and CI will happily build a duplicate.
+
+**If only "Publish the tagged release" fails** (seen 2026-09-13 for `v1.0`: build, signing and the Actions artifact all succeeded, but GitHub answered every create-release call with 500/502 for over half an hour, from the action and from `gh release create` alike, leaving empty `untagged-*` drafts behind). First just `gh run rerun <run-id> --failed`. If it keeps failing, publish by hand — the two-step path worked when the one-shot create did not:
+
+```bash
+gh run download <run-id> -n markdown-capture-apk -D /tmp/apk        # the signed APK from the run
+ID=$(gh api -X POST repos/rcastberg/markdown_capture/releases -f tag_name=v1.0 -f name=v1.0 \
+       -f body="…" -F draft=true --jq .id)
+gh api --method POST -H "Content-Type: application/vnd.android.package-archive" \
+  "https://uploads.github.com/repos/rcastberg/markdown_capture/releases/$ID/assets?name=markdown-capture.apk" \
+  --input /tmp/apk/markdown-capture.apk                                 # NOT `gh release upload <tag>`: with several drafts for the tag it picks the wrong one
+gh api -X PATCH repos/rcastberg/markdown_capture/releases/$ID -F draft=false
+```
+
+Then delete the stray drafts: `gh api repos/rcastberg/markdown_capture/releases --jq '.[] | select(.draft) | .id'` and `gh api -X DELETE …/releases/<id>` (these too may 500 for a while).
