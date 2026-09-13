@@ -54,7 +54,7 @@ jobs:
       - name: A tag must be signed
         if: startsWith(github.ref, 'refs/tags/v') && steps.signing.outputs.available != 'true'
         run: |
-          echo "::error::Tagged release needs KEYSTORE_BASE64, KEYSTORE_PASSWORD, KEY_ALIAS and KEY_PASSWORD."
+          echo "::error::Tagged release needs KEYSTORE_BASE64, KEYSTORE_PASSWORD and KEY_ALIAS."
           exit 1
 
       - name: Restore keystore
@@ -65,16 +65,12 @@ jobs:
           set -euo pipefail
           echo "${KEYSTORE_BASE64}" | base64 -d > markdown-capture-release.jks
 
-      # Fail in seconds with a precise message for the store password and alias. KEY_PASSWORD
-      # is deliberately NOT checked here: on a PKCS12 keystore keytool ignores -keypass and
-      # uses the store password (both -importkeystore and -certreq gave false passes with a
-      # wrong KEY_PASSWORD on 2026-09-13). apksigner below is the only real key-password test.
+      # Fail in seconds with a precise message rather than minutes into the build.
       - name: Check the keystore password and alias
         if: steps.signing.outputs.available == 'true'
         env:
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
-          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: |
           set -uo pipefail
           if ! keytool -list -keystore markdown-capture-release.jks -storepass "$KEYSTORE_PASSWORD" >/dev/null 2>&1; then
@@ -84,11 +80,6 @@ jobs:
             echo "::error::KEY_ALIAS '$KEY_ALIAS' is not in the keystore."; exit 1
           fi
           echo "Keystore password and alias check out."
-          # Lengths only — never the values. Byte count != char count means non-ASCII.
-          for v in KEYSTORE_PASSWORD KEY_PASSWORD; do
-            b=$(printf %s "${!v}" | wc -c); c=$(printf %s "${!v}" | wc -m)
-            echo "$v: $b bytes, $c chars$([ "$b" != "$c" ] && echo ' (contains non-ASCII characters)')"
-          done
 
       # Gradle only produces the *unsigned* release APK here; signing is done by apksigner
       # in the next step. Gradle's own signing failed on this keystore twice — via
@@ -105,22 +96,21 @@ jobs:
             cp app/build/outputs/apk/debug/app-debug.apk markdown-capture.apk
           fi
 
+      # No separate key password: this is a PKCS12 keystore, where the key is protected
+      # by the store password (keytool enforces that, and keytool unlocked the key with
+      # KEYSTORE_PASSWORD alone). Without --key-pass apksigner uses the store password.
       - name: Sign with apksigner
         if: steps.signing.outputs.available == 'true'
         env:
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
-          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: |
           set -euo pipefail
           BT=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)
           "$BT/zipalign" -f -p 4 app/build/outputs/apk/release/app-release-unsigned.apk aligned.apk
-          if ! "$BT/apksigner" sign --ks markdown-capture-release.jks --ks-key-alias "$KEY_ALIAS" \
-                --ks-pass env:KEYSTORE_PASSWORD --key-pass env:KEY_PASSWORD \
-                --out markdown-capture.apk aligned.apk; then
-            echo "::error::apksigner could not unlock key '$KEY_ALIAS' with KEY_PASSWORD (the store password and alias were verified above). For a PKCS12 keystore the key password is normally identical to KEYSTORE_PASSWORD — set KEY_PASSWORD to the same value."
-            exit 1
-          fi
+          "$BT/apksigner" sign --ks markdown-capture-release.jks --ks-key-alias "$KEY_ALIAS" \
+            --ks-pass env:KEYSTORE_PASSWORD \
+            --out markdown-capture.apk aligned.apk
           rm -f aligned.apk
 
       # Prove the APK really is signed before anything is published — an unsigned
