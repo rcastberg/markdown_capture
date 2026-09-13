@@ -94,6 +94,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         inactivityJob?.cancel()
         inactivityJob = viewModelScope.launch {
             delay(2 * 60 * 1000L)
+            // Never close the app while a capture is still being processed — finishing
+            // clears the ViewModel and cancels the in-flight job, losing the photo.
+            while (backgroundJobCount > 0) delay(5_000L)
             _finishEvent.emit(Unit)
         }
     }
@@ -430,17 +433,35 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         parent.findFile(name) ?: parent.createDirectory(name)
             ?: error("Cannot create directory: $name")
 
+    /** Quote a string for a YAML double-quoted scalar. */
+    private fun yamlQuote(value: String): String =
+        "\"" + value.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", " ") + "\""
+
     private fun buildFrontmatter(location: LocationData?, model: String) = buildString {
         append("---\n")
         if (location != null) {
             append("latitude: ${location.latitude}\n")
             append("longitude: ${location.longitude}\n")
-            location.name?.let    { append("place: \"$it\"\n") }
-            location.address?.let { append("address: \"$it\"\n") }
-            append("map: \"https://www.google.com/maps?q=${location.latitude},${location.longitude}\"\n")
+            location.name?.let    { append("place: ${yamlQuote(it)}\n") }
+            location.address?.let { append("address: ${yamlQuote(it)}\n") }
+            append("map: ${yamlQuote("https://www.google.com/maps?q=${location.latitude},${location.longitude}")}\n")
         }
-        if (model.isNotBlank()) append("model: \"$model\"\n")
+        if (model.isNotBlank()) append("model: ${yamlQuote(model)}\n")
         append("---\n\n")
+    }
+
+    /**
+     * SAF silently renames a colliding file to "name (1).md", which would leave the note
+     * pointing at another capture's _resources folder. Pick a base name that is unused for
+     * both the note and its resources folder instead.
+     */
+    private fun uniqueBaseName(folder: DocumentFile, resources: DocumentFile, candidate: String): String {
+        fun taken(name: String) =
+            folder.findFile("$name.md") != null || resources.findFile(name) != null
+        if (!taken(candidate)) return candidate
+        var n = 2
+        while (taken("$candidate-$n")) n++
+        return "$candidate-$n"
     }
 
     private suspend fun saveFiles(
@@ -456,10 +477,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val folder = DocumentFile.fromTreeUri(context, Uri.parse(settings.outputFolderUri))
             ?: error("Cannot access output folder")
 
-        val dateStr  = LocalDate.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd"))
-        val baseName = "$dateStr-$filename"
+        val dateStr   = LocalDate.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd"))
+        val resources = getOrCreateDir(folder, "_resources")
+        val baseName  = uniqueBaseName(folder, resources, "$dateStr-$filename")
 
-        val noteFolder = getOrCreateDir(getOrCreateDir(folder, "_resources"), baseName)
+        val noteFolder = getOrCreateDir(resources, baseName)
 
         val imageFile = noteFolder.createFile("image/jpeg", "image.jpg")
             ?: error("Cannot create image file")
@@ -502,10 +524,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val folder = DocumentFile.fromTreeUri(context, Uri.parse(settings.outputFolderUri))
             ?: error("Cannot access output folder")
 
-        val dateStr  = LocalDate.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd"))
-        val baseName = "$dateStr-$filename"
+        val dateStr   = LocalDate.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd"))
+        val resources = getOrCreateDir(folder, "_resources")
+        val baseName  = uniqueBaseName(folder, resources, "$dateStr-$filename")
 
-        val noteFolder = getOrCreateDir(getOrCreateDir(folder, "_resources"), baseName)
+        val noteFolder = getOrCreateDir(resources, baseName)
 
         val imageRefs = StringBuilder()
         imagesList.forEachIndexed { index, imgBytes ->
@@ -545,13 +568,21 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     @SuppressLint("MissingPermission")
     private fun getLastKnownLocation(): LocationData? {
         val context: Context = getApplication()
-        if (ContextCompat.checkSelfPermission(context, android.Manifest.permission.ACCESS_COARSE_LOCATION)
-            != PackageManager.PERMISSION_GRANTED) return null
+        fun granted(p: String) = ContextCompat.checkSelfPermission(context, p) == PackageManager.PERMISSION_GRANTED
+        val fine   = granted(android.Manifest.permission.ACCESS_FINE_LOCATION)
+        val coarse = granted(android.Manifest.permission.ACCESS_COARSE_LOCATION)
+        if (!fine && !coarse) return null
         val lm = context.getSystemService(Context.LOCATION_SERVICE) as LocationManager
-        val loc = lm.getLastKnownLocation(LocationManager.GPS_PROVIDER)
-            ?: lm.getLastKnownLocation(LocationManager.NETWORK_PROVIDER)
-            ?: lm.getLastKnownLocation(LocationManager.PASSIVE_PROVIDER)
-            ?: return null
+        // GPS requires FINE (user may grant only "approximate" on Android 12+); a provider that
+        // does not exist on the device can throw. Location is best-effort — never fail a capture.
+        val providers = buildList {
+            if (fine) add(LocationManager.GPS_PROVIDER)
+            add(LocationManager.NETWORK_PROVIDER)
+            add(LocationManager.PASSIVE_PROVIDER)
+        }
+        val loc = providers.firstNotNullOfOrNull { p ->
+            runCatching { lm.getLastKnownLocation(p) }.getOrNull()
+        } ?: return null
         return LocationData(loc.latitude, loc.longitude)
     }
 

@@ -5,6 +5,10 @@ import android.content.Context
 import android.content.pm.PackageManager
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraManager
+import android.os.Build
+import android.os.VibrationEffect
+import android.os.Vibrator
+import android.os.VibratorManager
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.camera.camera2.interop.Camera2CameraInfo
@@ -15,6 +19,8 @@ import androidx.camera.core.ImageCaptureException
 import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -34,6 +40,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
@@ -58,6 +65,24 @@ private fun buildCameraSelector(cameraId: String): CameraSelector =
             infoList.filter { Camera2CameraInfo.from(it).cameraId == cameraId }
         }
         .build()
+
+@Suppress("DEPRECATION")
+private fun vibrateShutter(context: Context) {
+    runCatching {
+        val vibrator = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            (context.getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as VibratorManager).defaultVibrator
+        } else {
+            context.getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
+        }
+        if (!vibrator.hasVibrator()) return
+        val effect = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            VibrationEffect.createPredefined(VibrationEffect.EFFECT_CLICK)
+        } else {
+            VibrationEffect.createOneShot(40, VibrationEffect.DEFAULT_AMPLITUDE)
+        }
+        vibrator.vibrate(effect)
+    }
+}
 
 private fun detectLenses(context: Context): List<LensInfo> {
     return runCatching {
@@ -127,6 +152,16 @@ fun CameraScreen(
     val availableLenses = remember { detectLenses(context) }
     var flashMode by remember { mutableStateOf(ImageCapture.FLASH_MODE_OFF) }
 
+    // Shutter feedback: bumped on button press to flash the preview white and vibrate
+    var shutterFlashTrigger by remember { mutableIntStateOf(0) }
+    val shutterFlashAlpha = remember { Animatable(0f) }
+    LaunchedEffect(shutterFlashTrigger) {
+        if (shutterFlashTrigger == 0) return@LaunchedEffect
+        vibrateShutter(context)
+        shutterFlashAlpha.snapTo(0.85f)
+        shutterFlashAlpha.animateTo(0f, animationSpec = tween(durationMillis = 250))
+    }
+
     val permissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { permissions -> hasCameraPermission = permissions[Manifest.permission.CAMERA] == true }
@@ -134,9 +169,13 @@ fun CameraScreen(
     LaunchedEffect(Unit) {
         val needed = buildList {
             if (!hasCameraPermission) add(Manifest.permission.CAMERA)
+            // Android 12+ ignores a request for FINE location unless COARSE is requested in the same call
             if (ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION)
                 != PackageManager.PERMISSION_GRANTED
-            ) add(Manifest.permission.ACCESS_FINE_LOCATION)
+            ) {
+                add(Manifest.permission.ACCESS_COARSE_LOCATION)
+                add(Manifest.permission.ACCESS_FINE_LOCATION)
+            }
         }
         if (needed.isNotEmpty()) permissionLauncher.launch(needed.toTypedArray())
     }
@@ -150,7 +189,7 @@ fun CameraScreen(
     }
     val previewView = remember { PreviewView(context) }
 
-    LaunchedEffect(hasCameraPermission, selectedLensIndex) {
+    LaunchedEffect(hasCameraPermission, selectedLensIndex, imageCapture) {
         if (!hasCameraPermission) return@LaunchedEffect
         val future = ProcessCameraProvider.getInstance(context)
         future.addListener({
@@ -298,6 +337,16 @@ fun CameraScreen(
                     Box(Modifier.fillMaxSize())
                 }
 
+                // Shutter flash overlay
+                if (shutterFlashAlpha.value > 0f) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .graphicsLayer { alpha = shutterFlashAlpha.value }
+                            .background(Color.White)
+                    )
+                }
+
                 // Warning overlays
                 Column(modifier = Modifier.fillMaxWidth().align(Alignment.TopCenter)) {
                     if (outputFolderUri.isBlank()) {
@@ -410,6 +459,7 @@ fun CameraScreen(
                                     onNavigateToSettings()
                                     return@FloatingActionButton
                                 }
+                                shutterFlashTrigger++
                                 runCatching {
                                     val tempFile = File.createTempFile("cap", ".jpg", context.cacheDir)
                                     val opts = ImageCapture.OutputFileOptions.Builder(tempFile).build()

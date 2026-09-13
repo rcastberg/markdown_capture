@@ -175,9 +175,13 @@ object LlmClient {
             for (j in 0 until images.length()) {
                 val img = images.getJSONObject(j)
                 val id  = img.optString("id", "img-$i-$j")
-                val b64 = img.optString("image_base64", "")
+                // May be a data URI ("data:image/jpeg;base64,...") — strip the prefix, otherwise
+                // Android's lenient decoder emits junk bytes ahead of the JPEG header.
+                val b64 = img.optString("image_base64", "").substringAfter(',', "")
+                    .ifBlank { img.optString("image_base64", "") }
                 if (b64.isNotBlank()) {
-                    extractedImages.add(Pair(id, Base64.decode(b64, Base64.DEFAULT)))
+                    runCatching { Base64.decode(b64, Base64.DEFAULT) }
+                        .onSuccess { extractedImages.add(Pair(id, it)) }
                 }
             }
         }
@@ -310,9 +314,11 @@ object LlmClient {
                 .post(requestBody.toRequestBody("application/json".toMediaType()))
                 .build()
 
-            val response = client.newCall(request).execute()
-            val body = response.body?.string() ?: throw Exception("Empty response from API")
-            if (!response.isSuccessful) throw Exception("API error ${response.code}: $body")
+            val body = client.newCall(request).execute().use { response ->
+                val b = response.body?.string() ?: throw Exception("Empty response from API")
+                if (!response.isSuccessful) throw Exception("API error ${response.code}: $b")
+                b
+            }
 
             JSONObject(body)
                 .getJSONArray("choices")

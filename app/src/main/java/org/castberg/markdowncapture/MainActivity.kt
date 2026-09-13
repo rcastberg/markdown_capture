@@ -25,7 +25,9 @@ class MainActivity : ComponentActivity() {
         super.onStop()
         viewModel.cancelInactivityTimer()
         val pm = getSystemService(POWER_SERVICE) as PowerManager
-        if (!pm.isInteractive) finish()
+        // Auto-close on screen-off, but not while a capture is still uploading/saving:
+        // finishing clears the ViewModel and cancels the job, silently losing the photo.
+        if (!pm.isInteractive && viewModel.backgroundJobCount == 0) finish()
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
