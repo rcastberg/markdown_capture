@@ -194,7 +194,7 @@ cp keystore.properties.example keystore.properties   # then fill in the password
 ./gradlew assembleRelease                            # app/build/outputs/apk/release/app-release.apk
 ```
 
-Without `keystore.properties` the release build still succeeds and produces `app-release-unsigned.apk` rather than failing on a missing property — a fresh clone must build.
+Without `keystore.properties` the release build still succeeds and produces `app-release-unsigned.apk` rather than failing on a missing property — a fresh clone must build. `SIGNING_STORE_FILE`, `SIGNING_STORE_PASSWORD`, `SIGNING_KEY_ALIAS` and `SIGNING_KEY_PASSWORD` environment variables take precedence over the file. In a `.properties` file a backslash is an escape character — double it, or use the env vars instead.
 
 ### CI (`.github/workflows/build.yml`)
 
@@ -207,6 +207,6 @@ Only a `v*` tag publishes a GitHub Release with a direct `markdown-capture.apk` 
 Four repo secrets are needed (Settings → Secrets and variables → Actions):
 `KEYSTORE_BASE64` (`base64 -w0 markdown-capture-release.jks`), `KEYSTORE_PASSWORD`, `KEY_ALIAS` (`markdown-capture`), `KEY_PASSWORD`.
 
-Two guards worth keeping: the job runs `apksigner verify` before publishing (a broken secret would otherwise silently ship an uninstallable APK), and the keystore is shredded in an `if: always()` step so a failure part-way through leaves no key material on the runner.
+Three guards worth keeping: a keytool step checks the store password, alias and key password within seconds and names the wrong secret; the job runs `apksigner verify` before publishing (a broken secret would otherwise silently ship an uninstallable APK); and the keystore is shredded in an `if: always()` step so a failure part-way through leaves no key material on the runner. The passwords reach Gradle as `SIGNING_*` environment variables, not via `keystore.properties` — the first `v1.0` attempt failed exactly because the `.properties` parser corrupted a password containing a backslash while keytool accepted it verbatim.
 
 **Bump `versionCode` in `app/build.gradle.kts` before tagging** — Android refuses a downgrade, and CI will happily build a duplicate.

@@ -7,11 +7,13 @@ plugins {
 }
 
 /**
- * Release signing is configured from `keystore.properties` at the repo root, which
- * is gitignored along with the keystore itself — neither the key nor its passwords
- * belong in version control. When the file is absent (a fresh clone, CI without the
- * secrets, anyone else's machine) the release build still succeeds and simply
- * produces an unsigned APK rather than failing on a missing property.
+ * Release signing comes from SIGNING_* environment variables when set (CI passes the
+ * repo secrets this way — a .properties file would mangle a password containing a
+ * backslash, since Java treats it as an escape), otherwise from `keystore.properties`
+ * at the repo root for local builds. Both are gitignored along with the keystore —
+ * neither the key nor its passwords belong in version control. When neither source is
+ * present (a fresh clone, CI without the secrets) the release build still succeeds
+ * and simply produces an unsigned APK rather than failing on a missing property.
  *
  * See "Signed release build" in CLAUDE.md.
  */
@@ -19,7 +21,10 @@ val keystorePropertiesFile = rootProject.file("keystore.properties")
 val keystoreProperties = Properties().apply {
     if (keystorePropertiesFile.exists()) FileInputStream(keystorePropertiesFile).use { load(it) }
 }
-val hasSigningConfig = keystorePropertiesFile.exists()
+fun signingValue(envName: String, propertyName: String): String? =
+    System.getenv(envName)?.takeIf { it.isNotEmpty() } ?: keystoreProperties.getProperty(propertyName)
+val signingStoreFile = signingValue("SIGNING_STORE_FILE", "storeFile")
+val hasSigningConfig = signingStoreFile != null
 
 android {
     namespace = "org.castberg.markdowncapture"
@@ -39,10 +44,10 @@ android {
     signingConfigs {
         create("release") {
             if (hasSigningConfig) {
-                storeFile = rootProject.file(keystoreProperties.getProperty("storeFile"))
-                storePassword = keystoreProperties.getProperty("storePassword")
-                keyAlias = keystoreProperties.getProperty("keyAlias")
-                keyPassword = keystoreProperties.getProperty("keyPassword")
+                storeFile = rootProject.file(signingStoreFile!!)
+                storePassword = signingValue("SIGNING_STORE_PASSWORD", "storePassword")
+                keyAlias = signingValue("SIGNING_KEY_ALIAS", "keyAlias")
+                keyPassword = signingValue("SIGNING_KEY_PASSWORD", "keyPassword")
             }
         }
     }

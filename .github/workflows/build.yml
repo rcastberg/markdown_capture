@@ -61,18 +61,9 @@ jobs:
         if: steps.signing.outputs.available == 'true'
         env:
           KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
-          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
-          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
-          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: |
           set -euo pipefail
           echo "${KEYSTORE_BASE64}" | base64 -d > markdown-capture-release.jks
-          cat > keystore.properties <<EOF
-          storeFile=markdown-capture-release.jks
-          storePassword=${KEYSTORE_PASSWORD}
-          keyAlias=${KEY_ALIAS}
-          keyPassword=${KEY_PASSWORD}
-          EOF
 
       # Fail in seconds with a precise message rather than four minutes into the Gradle
       # build with a generic "Given final block not properly padded". The export to a
@@ -101,11 +92,18 @@ jobs:
           rm -f /tmp/check.p12
           echo "Keystore, alias and both passwords check out."
 
+      # Passwords go to Gradle as environment variables, never via keystore.properties:
+      # Java's .properties parser treats backslash as an escape and silently corrupts
+      # such a password (the passwords passed keytool above but failed Gradle that way).
       - name: Assemble
+        env:
+          SIGNING_STORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          SIGNING_KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          SIGNING_KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: |
           set -euo pipefail
           if [ "${{ steps.signing.outputs.available }}" = "true" ]; then
-            ./gradlew assembleRelease -Dorg.gradle.java.home="$JAVA_HOME"
+            SIGNING_STORE_FILE=markdown-capture-release.jks ./gradlew assembleRelease -Dorg.gradle.java.home="$JAVA_HOME"
             cp app/build/outputs/apk/release/app-release.apk markdown-capture.apk
           else
             ./gradlew assembleDebug -Dorg.gradle.java.home="$JAVA_HOME"
@@ -125,7 +123,7 @@ jobs:
       # Always, including when a step above failed — no key material left behind.
       - name: Shred keystore
         if: always()
-        run: rm -f markdown-capture-release.jks keystore.properties
+        run: rm -f markdown-capture-release.jks
 
       - uses: actions/upload-artifact@v4
         with:
