@@ -74,6 +74,33 @@ jobs:
           keyPassword=${KEY_PASSWORD}
           EOF
 
+      # Fail in seconds with a precise message rather than four minutes into the Gradle
+      # build with a generic "Given final block not properly padded". The export to a
+      # throwaway PKCS12 is the only keytool operation that actually unlocks the key.
+      - name: Check the keystore passwords
+        if: steps.signing.outputs.available == 'true'
+        env:
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          set -uo pipefail
+          if ! keytool -list -keystore markdown-capture-release.jks -storepass "$KEYSTORE_PASSWORD" >/dev/null 2>&1; then
+            echo "::error::KEYSTORE_PASSWORD does not open the keystore."; exit 1
+          fi
+          if ! keytool -list -keystore markdown-capture-release.jks -storepass "$KEYSTORE_PASSWORD" -alias "$KEY_ALIAS" >/dev/null 2>&1; then
+            echo "::error::KEY_ALIAS '$KEY_ALIAS' is not in the keystore."; exit 1
+          fi
+          if ! keytool -importkeystore -noprompt \
+                -srckeystore markdown-capture-release.jks -srcstorepass "$KEYSTORE_PASSWORD" \
+                -srcalias "$KEY_ALIAS" -srckeypass "$KEY_PASSWORD" \
+                -destkeystore /tmp/check.p12 -deststoretype PKCS12 \
+                -deststorepass "$KEY_PASSWORD" -destkeypass "$KEY_PASSWORD" >/dev/null 2>&1; then
+            echo "::error::KEY_PASSWORD does not unlock key '$KEY_ALIAS' (store password is fine)."; exit 1
+          fi
+          rm -f /tmp/check.p12
+          echo "Keystore, alias and both passwords check out."
+
       - name: Assemble
         run: |
           set -euo pipefail
