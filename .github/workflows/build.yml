@@ -65,9 +65,10 @@ jobs:
           set -euo pipefail
           echo "${KEYSTORE_BASE64}" | base64 -d > markdown-capture-release.jks
 
-      # Fail in seconds with a precise message rather than four minutes into the Gradle
-      # build with a generic "Given final block not properly padded". The export to a
-      # throwaway PKCS12 is the only keytool operation that actually unlocks the key.
+      # Fail in seconds with a precise message rather than minutes into the build with a
+      # generic "Given final block not properly padded". `-certreq` with an explicit
+      # -keypass is used for the key check because keytool's `-importkeystore` silently
+      # falls back to the *store* password first and so passed with a wrong KEY_PASSWORD.
       - name: Check the keystore passwords
         if: steps.signing.outputs.available == 'true'
         env:
@@ -82,14 +83,11 @@ jobs:
           if ! keytool -list -keystore markdown-capture-release.jks -storepass "$KEYSTORE_PASSWORD" -alias "$KEY_ALIAS" >/dev/null 2>&1; then
             echo "::error::KEY_ALIAS '$KEY_ALIAS' is not in the keystore."; exit 1
           fi
-          if ! keytool -importkeystore -noprompt \
-                -srckeystore markdown-capture-release.jks -srcstorepass "$KEYSTORE_PASSWORD" \
-                -srcalias "$KEY_ALIAS" -srckeypass "$KEY_PASSWORD" \
-                -destkeystore /tmp/check.p12 -deststoretype PKCS12 \
-                -deststorepass "$KEY_PASSWORD" -destkeypass "$KEY_PASSWORD" >/dev/null 2>&1; then
-            echo "::error::KEY_PASSWORD does not unlock key '$KEY_ALIAS' (store password is fine)."; exit 1
+          if ! keytool -certreq -keystore markdown-capture-release.jks -storepass "$KEYSTORE_PASSWORD" \
+                -alias "$KEY_ALIAS" -keypass "$KEY_PASSWORD" -file /tmp/check.csr >/dev/null 2>&1; then
+            echo "::error::KEY_PASSWORD does not unlock key '$KEY_ALIAS' (store password and alias are fine). For a keytool-made PKCS12 keystore it must equal KEYSTORE_PASSWORD."; exit 1
           fi
-          rm -f /tmp/check.p12
+          rm -f /tmp/check.csr
           echo "Keystore, alias and both passwords check out."
           # Lengths only — never the values. Byte count != char count means non-ASCII.
           for v in KEYSTORE_PASSWORD KEY_PASSWORD; do
