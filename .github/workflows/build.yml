@@ -131,8 +131,9 @@ jobs:
           # Not -strict: it exits non-zero for a self-signed cert, which every upload key is.
           # "jar verified" (possibly "with signer errors" = self-signed / no timestamp) is a pass;
           # an unsigned bundle prints "jar is unsigned" and must fail.
-          jarsigner -verify -certs markdown-capture.aab > jarsigner.txt 2>&1 || true
-          grep -E 'CN=' jarsigner.txt | head -1
+          jarsigner -verify -verbose:summary -certs markdown-capture.aab > jarsigner.txt 2>&1 || true
+          grep -m1 'CN=' jarsigner.txt || true
+          grep -E '^jar (verified|is unsigned)' jarsigner.txt || true
           grep -q '^jar verified' jarsigner.txt || { cat jarsigner.txt; echo "::error::App bundle is not signed."; exit 1; }
           rm -f jarsigner.txt
 
