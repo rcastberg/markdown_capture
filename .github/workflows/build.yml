@@ -128,8 +128,13 @@ jobs:
           set -euo pipefail
           ./gradlew bundleRelease -Dorg.gradle.java.home="$JAVA_HOME"
           cp app/build/outputs/bundle/release/app-release.aab markdown-capture.aab
-          jarsigner -verify -strict markdown-capture.aab
-          jarsigner -verify -verbose:summary -certs markdown-capture.aab | grep -E 'CN=|verified' | head -3
+          # Not -strict: it exits non-zero for a self-signed cert, which every upload key is.
+          # "jar verified" (possibly "with signer errors" = self-signed / no timestamp) is a pass;
+          # an unsigned bundle prints "jar is unsigned" and must fail.
+          jarsigner -verify -certs markdown-capture.aab > jarsigner.txt 2>&1 || true
+          grep -E 'CN=' jarsigner.txt | head -1
+          grep -q '^jar verified' jarsigner.txt || { cat jarsigner.txt; echo "::error::App bundle is not signed."; exit 1; }
+          rm -f jarsigner.txt
 
       # Prove the APK really is signed before anything is published — an unsigned
       # release looks official but cannot be installed over the previous version.
