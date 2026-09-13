@@ -1,7 +1,25 @@
+import java.io.FileInputStream
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.plugin.compose") version "2.3.20"
 }
+
+/**
+ * Release signing is configured from `keystore.properties` at the repo root, which
+ * is gitignored along with the keystore itself — neither the key nor its passwords
+ * belong in version control. When the file is absent (a fresh clone, CI without the
+ * secrets, anyone else's machine) the release build still succeeds and simply
+ * produces an unsigned APK rather than failing on a missing property.
+ *
+ * See "Signed release build" in CLAUDE.md.
+ */
+val keystorePropertiesFile = rootProject.file("keystore.properties")
+val keystoreProperties = Properties().apply {
+    if (keystorePropertiesFile.exists()) FileInputStream(keystorePropertiesFile).use { load(it) }
+}
+val hasSigningConfig = keystorePropertiesFile.exists()
 
 android {
     namespace = "org.castberg.markdowncapture"
@@ -11,13 +29,27 @@ android {
         applicationId = "org.castberg.markdowncapture"
         minSdk = 26
         targetSdk = 36
+        // Bump versionCode for every build installed over an existing one; Android
+        // refuses a downgrade. versionName is what shows in Settings > Apps.
         versionCode = 1
         versionName = "1.0"
         buildConfigField("long", "BUILD_TIME", "${System.currentTimeMillis()}L")
     }
 
+    signingConfigs {
+        create("release") {
+            if (hasSigningConfig) {
+                storeFile = rootProject.file(keystoreProperties.getProperty("storeFile"))
+                storePassword = keystoreProperties.getProperty("storePassword")
+                keyAlias = keystoreProperties.getProperty("keyAlias")
+                keyPassword = keystoreProperties.getProperty("keyPassword")
+            }
+        }
+    }
+
     buildTypes {
         release {
+            signingConfig = if (hasSigningConfig) signingConfigs.getByName("release") else null
             isMinifyEnabled = false
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }

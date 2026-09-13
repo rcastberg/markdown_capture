@@ -19,6 +19,16 @@ local.properties
 *.ap_
 *.dex
 
+# Release signing — the keystore and its passwords must never be committed.
+# Losing the keystore means you can never update an already-installed app, so
+# keep a backup of it outside this repo (currently ~/Documents/android-keystore).
+keystore.properties
+*.jks
+*.keystore
+
+# Agent/session scratch
+.claude/
+
 # Heap dumps
 *.hprof
 

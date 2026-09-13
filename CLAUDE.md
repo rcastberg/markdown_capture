@@ -18,8 +18,8 @@ MainActivity
 ```
 
 **Screens** (sealed class `MainViewModel.Screen`):
-- `Camera` — live camera preview, capture button, zoom/lens controls, Capture/Detail/Transcribe tab row
-- `Settings` — provider API keys (multi-provider), per-tab model/prompt/token config, filename model, general
+- `Camera` — live camera preview, capture button, zoom/lens controls, filled tab row (one tab per configured `TabConfig`)
+- `Settings` — provider API keys (multi-provider), add/remove/rename tabs with per-tab model/prompt/token config, filename model, general
 - `Processing` — progress indicator (used only for `resubmit`; normal captures run in background)
 - `ViewCapture` — rendered markdown view of a saved capture record (inline images, share as MD/PDF)
 - `Error` — shows file errors with retry/retake options (only from `resubmit`)
@@ -29,13 +29,13 @@ MainActivity
 | File | Purpose |
 |------|---------|
 | `MainActivity.kt` | Entry point; wires ViewModel state to Composable screens |
-| `MainViewModel.kt` | Capture workflow, location lookup, file saving, navigation, CaptureMode state |
-| `data/AppSettings.kt` | `AppSettings`, `TabConfig`, `ProviderCredential`, `CaptureMode` enum |
+| `MainViewModel.kt` | Capture workflow, location lookup, file saving, navigation, `activeTabIndex` |
+| `data/AppSettings.kt` | `AppSettings`, `TabConfig`, `ProviderCredential`, `DEFAULT_TABS` |
 | `data/SettingsRepository.kt` | DataStore-backed persistence; migrates old flat keys on first run |
 | `data/LlmClient.kt` | OkHttp client: chat/completions + Mistral OCR endpoint, `OcrResult` |
 | `data/ProviderConfig.kt` | Provider/model catalogue (OpenAI, OpenRouter, Google, Mistral, Custom) |
 | `data/CaptureRecord.kt` | Capture history entry (serialised to/from JSON) |
-| `ui/CameraScreen.kt` | Camera preview, TabRow+HorizontalPager, pinch-zoom, lens+zoom group |
+| `ui/CameraScreen.kt` | Camera preview, filled tab row + HorizontalPager, pinch-zoom, lens+zoom group, shutter feedback |
 | `ui/SettingsScreen.kt` | API Keys section, per-tab sections, filename model, general settings |
 | `ui/ProcessingScreen.kt` | Spinner with step label |
 | `ui/ResultScreen.kt` | `CaptureDetailScreen` — rendered/raw toggle, share as MD and PDF |
@@ -58,21 +58,23 @@ Most providers expose an **OpenAI-compatible `/chat/completions` endpoint**. Mis
 
 ### Multi-Provider Credential System
 
-`AppSettings` stores a `List<ProviderCredential>` (provider name + API key + optional custom URL). Each of the three capture tabs (`captureTab`, `detailTab`, `transcribeTab`) has its own `TabConfig` that references a provider by name. The ViewModel resolves the credential at capture time.
+`AppSettings` stores a `List<ProviderCredential>` (provider name + API key + optional custom URL). Each capture tab is a `TabConfig` in `AppSettings.tabs` that references a provider by name. The ViewModel resolves the credential at capture time; a tab whose provider has no credential gets an empty key and the request fails gracefully (`hasError`).
 
-### Tab System (`CaptureMode` enum)
+### Tab System (`List<TabConfig>`)
 
-| Mode | Description | Default model |
-|------|-------------|---------------|
-| `CAPTURE` | Quick note | gpt-4o-mini |
-| `DETAIL` | Detailed analysis | gpt-4o |
-| `TRANSCRIBE` | Text extraction / OCR | mistral-ocr-latest |
+Tabs are user-configurable (add / delete / rename in Settings). `DEFAULT_TABS` seeds three:
 
-`MainViewModel.activeTab` tracks the current mode. Each `TabConfig` carries: `providerName`, `model`, `systemPrompt`, `maxTokens`.
+| id | Name | Default provider / model | Default prompt |
+|----|------|--------------------------|----------------|
+| `capture` | Capture | OpenAI / gpt-4o-mini | `DEFAULT_MEDIUM_ANALYSIS_PROMPT` |
+| `detail` | Detail | OpenAI / gpt-4o | `DEFAULT_ANALYSIS_PROMPT` |
+| `transcribe` | Transcribe | Mistral / mistral-ocr-latest | `DEFAULT_TRANSCRIBE_PROMPT` |
+
+User-added tabs get id `custom-<millis>` and the medium prompt. `MainViewModel.activeTabIndex` tracks the current tab. Each `TabConfig` carries: `id`, `name`, `providerName`, `model`, `systemPrompt`, `maxTokens`, `noLlm` (save image only, timestamp filename).
 
 ### Mistral OCR
 
-When `transcribeTab.model == "mistral-ocr-latest"`, `LlmClient.ocrImage()` is called instead of `analyzeImage()`. It POSTs to `/ocr`, collects `pages[].markdown` (concatenated), and returns `OcrResult` containing extracted image bytes. These are saved as `extracted-N.jpg` alongside the note and their inline references in the markdown are rewritten to Obsidian `![[...]]` wikilinks.
+When a tab's model is `mistral-ocr-latest` (`isMistralOcr()`), `LlmClient.ocrImage()` is called instead of `analyzeImage()`. It POSTs to `/ocr`, collects `pages[].markdown` (concatenated), and returns `OcrResult` containing extracted image bytes (`image_base64` arrives as a data URI; the prefix is stripped before decoding). These are saved as `extracted-N.jpg` alongside the note and their inline references in the markdown are rewritten to Obsidian `![[...]]` wikilinks.
 
 ### Dynamic Model Fetching
 
@@ -99,7 +101,7 @@ Zoom factors shown in the UI are relative to the widest lens (widest = 1x).
 
 ### Lens Switching
 
-`buildCameraSelector(cameraId)` creates a `CameraSelector` using `Camera2CameraInfo` filter. The `LaunchedEffect` re-runs on `selectedLensIndex` change, unbinding and rebinding with the new selector. No `@OptIn` is needed — `ExperimentalCamera2Interop` is stable in CameraX 1.6.0.
+`buildCameraSelector(cameraId)` creates a `CameraSelector` using `Camera2CameraInfo` filter. The `LaunchedEffect` re-runs on `selectedLensIndex` or `imageCapture` change (a new `ImageCapture` is built whenever `imageQuality` changes and must be re-bound), unbinding and rebinding with the new selector. No `@OptIn` is needed — `ExperimentalCamera2Interop` is stable in CameraX 1.6.0.
 
 ### Zoom
 
@@ -109,26 +111,31 @@ Zoom factors shown in the UI are relative to the widest lens (widest = 1x).
 
 ### Tab Navigation
 
-`TabRow` with three tabs (Capture / Detail / Transcribe) sits below the TopAppBar. `HorizontalPager` (transparent pages) is overlaid on the camera preview to handle horizontal swipe gestures. Pager state and `MainViewModel.activeTab` are kept in sync via bidirectional `LaunchedEffect`s.
+A custom filled tab row (one cell per configured tab) sits below the TopAppBar. `HorizontalPager` (transparent pages) is overlaid on the camera preview to handle horizontal swipe gestures. Pager state and `MainViewModel.activeTabIndex` are kept in sync via bidirectional `LaunchedEffect`s.
+
+### Permissions request
+
+Camera is requested together with `ACCESS_COARSE_LOCATION` **and** `ACCESS_FINE_LOCATION` in one call — Android 12+ silently ignores a request for FINE alone. The user may grant only approximate location, so `getLastKnownLocation()` only queries the GPS provider when FINE is granted and wraps every provider lookup in `runCatching` (location is best-effort and must never fail a capture).
 
 ## Capture Workflow
 
-1. `CameraScreen` → user selects tab (Capture/Detail/Transcribe) and taps FAB
-2. CameraX captures JPEG to temp file in `cacheDir`
+1. `CameraScreen` → user selects a tab and taps FAB
+2. CameraX captures JPEG to temp file in `cacheDir`; on button press the preview flashes white (250 ms `Animatable` overlay) and the device vibrates (`vibrateShutter()`, `EFFECT_CLICK` on API 29+) as shutter feedback
 3. `MainViewModel.onImageCaptured(bytes)` increments `backgroundJobCount` and launches a background coroutine (camera stays open):
    - `fixImageOrientation(bytes, quality)` — reads EXIF rotation tag, physically rotates if needed
-   - Resolves `TabConfig` from `activeTab`, looks up `ProviderCredential` by provider name
+   - Resolves `TabConfig` from `activeTabIndex`, looks up `ProviderCredential` by provider name
+   - `noLlm` tabs skip the LLM entirely and use a `HHmmss` timestamp as the filename
    - **TRANSCRIBE + `mistral-ocr-latest`**: `LlmClient.ocrImage()` → `OcrResult`
    - **Other modes**: `LlmClient.analyzeImage(baseUrl, apiKey, bytes, model, prompt, maxTokens)` → markdown
    - LLM errors are caught: fallback markdown `"> Analysis failed: …"` is used, `hasError = true`
    - `LlmClient.generateFilename(baseUrl, apiKey, model, markdown)` → kebab-case name
    - `getLastKnownLocation()` → GPS coordinates
    - `reverseGeocode()` → human-readable address via Nominatim
-   - `saveFiles()` → writes image + OCR extracted images + markdown with YAML frontmatter (always runs, even on LLM error)
+   - `saveFiles()` → picks a unique base name via `uniqueBaseName()` (`-2`, `-3`, … suffix if `{date}-{name}.md` or its `_resources` folder already exists — SAF would otherwise silently create `name (1).md` pointing at the wrong resources), then writes image + OCR extracted images + markdown with YAML frontmatter (always runs, even on LLM error)
 4. Record persisted to DataStore history (last 20 entries); `hasError` flag set on LLM failure
 5. `backgroundJobCount` decremented in `finally`; a toast confirms save or reports file error
 
-`backgroundJobCount` is shown as a badge on the history icon in `CameraScreen`.
+`backgroundJobCount` is shown as a badge on the history icon in `CameraScreen`. It also gates auto-close: `MainActivity.onStop` only calls `finish()` on screen-off, and the 2-minute inactivity timer only emits `finishEvent`, when no job is running — finishing clears the ViewModel and would cancel the in-flight coroutine, losing the photo.
 
 **File layout on disk:**
 - `{output_folder}/{date}-{name}.md`
@@ -139,12 +146,12 @@ Zoom factors shown in the UI are relative to the widest lens (widest = 1x).
 ## Persistence
 
 **DataStore Preferences** keys (`SettingsRepository.kt`):
-`credentials` (JSON array of `ProviderCredential`), `capture_tab`, `detail_tab`, `transcribe_tab` (JSON `TabConfig`s), `filename_provider`, `filename_model`, `default_tab`, `output_folder_uri`, `image_quality`, `history` (JSON array)
+`credentials` (JSON array of `ProviderCredential`), `tabs` (JSON array of `TabConfig`), `filename_provider`, `filename_model`, `default_tab`, `output_folder_uri`, `image_quality`, `history` (JSON array)
 
-Old flat keys (`provider_name`, `api_key`, etc.) are migrated on first save and then removed.
+Two older layouts are migrated on read and their keys removed on the next save: the flat keys (`provider_name`, `api_key`, `high_effort_model`, …) from very old installs, and the fixed 3-tab keys (`capture_tab`, `detail_tab`, `transcribe_tab`).
 
-**YAML frontmatter fields** (always present):
-`model` (the LLM model used for analysis); plus when location is available: `latitude`, `longitude`, `place`, `address`, `map` (Google Maps URL `https://www.google.com/maps?q=lat,lon`)
+**YAML frontmatter fields**:
+`model` (the LLM model used for analysis; omitted for `noLlm` tabs); plus when location is available: `latitude`, `longitude`, `place`, `address`, `map` (Google Maps URL `https://www.google.com/maps?q=lat,lon`). String values are emitted through `yamlQuote()` (double-quoted, `\` and `"` escaped).
 
 ## Permissions
 
@@ -154,6 +161,7 @@ Old flat keys (`provider_name`, `api_key`, etc.) are migrated on first save and 
 | `INTERNET` | LLM API calls + Nominatim geocoding |
 | `ACCESS_FINE_LOCATION` | GPS coordinates for note frontmatter |
 | `ACCESS_COARSE_LOCATION` | Fallback location |
+| `VIBRATE` | Haptic shutter feedback on capture |
 
 ## Key Dependencies
 
@@ -168,7 +176,37 @@ androidx.lifecycle:lifecycle-viewmodel-compose:2.8.6
 
 ## Build
 
+- `./gradlew assembleDebug` → `app/build/outputs/apk/debug/app-debug.apk` (Gradle wrapper 9.4.1 is committed; needs `ANDROID_HOME` or `local.properties`)
+- `gradle.properties` pins `org.gradle.java.home` to JDK 21 because the system default `java` is a JRE-only 25 with no compiler. CI overrides it per-invocation with `-Dorg.gradle.java.home="$JAVA_HOME"` rather than editing the file.
 - Min SDK: 26 (Android 8.0)
 - Target SDK: 36
 - Portrait-only (`android:screenOrientation="portrait"`)
-- Language: Kotlin 2.x + Jetpack Compose (Material3)
+- Language: Kotlin 2.x + Jetpack Compose (Material3); AGP 9.x built-in Kotlin (no separate `kotlin-android` plugin)
+- Install to phone: `adb install app/build/outputs/apk/debug/app-debug.apk`
+
+### Signed release build
+
+The release keystore already exists at `~/Documents/android-keystore/markdown-capture-release.jks` (alias `markdown-capture`, PKCS12). It is gitignored (`*.jks`, `keystore.properties`) and **losing it means never being able to update an installed app again**, so keep a backup outside this repo.
+
+```bash
+cp ~/Documents/android-keystore/markdown-capture-release.jks .
+cp keystore.properties.example keystore.properties   # then fill in the passwords
+./gradlew assembleRelease                            # app/build/outputs/apk/release/app-release.apk
+```
+
+Without `keystore.properties` the release build still succeeds and produces `app-release-unsigned.apk` rather than failing on a missing property — a fresh clone must build.
+
+### CI (`.github/workflows/build.yml`)
+
+Same shape as `~/Documents/diaryapp`. One job, `apk`, **gated to a `v*` tag or a manual `workflow_dispatch` run** — a plain push to `main` does not build anything. Trade-off, accepted deliberately: a broken commit is not caught until the next tag or manual run. There is no unit-test suite, so there is no `test` job.
+
+**The APK is signed with the release key whenever the job runs, not only for a tag**: Android refuses to install an APK over one signed with a different key, so one key throughout means every install is an in-place upgrade. Without the secrets the job still succeeds and produces an unsigned *debug* APK, but a **`v*` tag fails loudly** if it cannot sign, because an unsigned tagged release looks official and cannot be installed over anything.
+
+Only a `v*` tag publishes a GitHub Release with a direct `markdown-capture.apk` download (`generate_release_notes: true`). A manual dispatch off a non-tag ref leaves the APK as a 30-day Actions artifact only (served as a zip).
+
+Four repo secrets are needed (Settings → Secrets and variables → Actions):
+`KEYSTORE_BASE64` (`base64 -w0 markdown-capture-release.jks`), `KEYSTORE_PASSWORD`, `KEY_ALIAS` (`markdown-capture`), `KEY_PASSWORD`.
+
+Two guards worth keeping: the job runs `apksigner verify` before publishing (a broken secret would otherwise silently ship an uninstallable APK), and the keystore is shredded in an `if: always()` step so a failure part-way through leaves no key material on the runner.
+
+**Bump `versionCode` in `app/build.gradle.kts` before tagging** — Android refuses a downgrade, and CI will happily build a duplicate.
