@@ -36,8 +36,8 @@ android {
         targetSdk = 36
         // Bump versionCode for every build installed over an existing one; Android
         // refuses a downgrade. versionName is what shows in Settings > Apps.
-        versionCode = 3
-        versionName = "1.2"
+        versionCode = 4
+        versionName = "1.3"
         buildConfigField("long", "BUILD_TIME", "${System.currentTimeMillis()}L")
     }
 

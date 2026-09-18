@@ -35,8 +35,8 @@ MainActivity
 | `data/LlmClient.kt` | OkHttp client: chat/completions + Mistral OCR endpoint, `OcrResult` |
 | `data/ProviderConfig.kt` | Provider/model catalogue (OpenAI, OpenRouter, Google, Mistral, Custom) |
 | `data/CaptureRecord.kt` | Capture history entry (serialised to/from JSON) |
-| `ui/CameraScreen.kt` | Camera preview, filled tab row + HorizontalPager, pinch-zoom, lens+zoom group, shutter feedback |
-| `ui/SettingsScreen.kt` | API Keys section, per-tab sections, general settings |
+| `ui/CameraScreen.kt` | Camera preview, filled tab row + HorizontalPager, pinch-zoom, lens+zoom group, shutter feedback, gallery picker |
+| `ui/SettingsScreen.kt` | API Keys section, per-tab sections (incl. `PromptBuilderDialog`), general settings |
 | `ui/ProcessingScreen.kt` | Spinner with step label |
 | `ui/ResultScreen.kt` | `CaptureDetailScreen` — rendered/raw toggle, share as MD and PDF |
 | `ui/MarkdownViewer.kt` | `parseMarkdown`, `RenderedMarkdown` composable, SAF image loader |
@@ -75,6 +75,10 @@ User-added tabs get id `custom-<millis>` and the medium prompt. `MainViewModel.a
 ### Mistral OCR
 
 When a tab's model is `mistral-ocr-latest` (`isMistralOcr()`), `LlmClient.ocrImage()` is called instead of `analyzeImage()`. It POSTs to `/ocr`, collects `pages[].markdown` (concatenated), and returns `OcrResult` containing extracted image bytes (`image_base64` arrives as a data URI; the prefix is stripped before decoding). These are saved as `extracted-N.jpg` alongside the note and their inline references in the markdown are rewritten to Obsidian `![[...]]` wikilinks.
+
+### Prompt Builder
+
+Each non-OCR tab's Settings section has a "Build with LLM" button next to "Reset to default" (disabled until the tab has a resolvable credential). It opens `PromptBuilderDialog` (`SettingsScreen.kt`): pick a model from the tab's provider and describe in free text what the note should do differently. `LlmClient.buildSystemPrompt(baseUrl, apiKey, model, currentPrompt, userDescription)` sends a fixed meta-instruction (write for a vision LLM producing an Obsidian note; keep wikilinks/tags/markdown-only rules) plus the tab's current prompt (`tab.systemPrompt.ifBlank { default }`) and the user's description, and returns a full replacement prompt that the caller writes into `tab.systemPrompt`. This is a plain text call (no image).
 
 ### Dynamic Model Fetching
 
@@ -119,8 +123,8 @@ Camera is requested together with `ACCESS_COARSE_LOCATION` **and** `ACCESS_FINE_
 
 ## Capture Workflow
 
-1. `CameraScreen` → user selects a tab and taps FAB
-2. CameraX captures JPEG to temp file in `cacheDir`; on button press the preview flashes white (250 ms `Animatable` overlay) and the device vibrates (`vibrateShutter()`, `EFFECT_CLICK` on API 29+) as shutter feedback
+1. `CameraScreen` → user selects a tab and either taps the FAB to capture, or taps the gallery icon in the top bar to pick an existing photo (`ActivityResultContracts.PickVisualMedia()` — the system Photos Picker, so no storage permission needed) — both paths converge on `onImageCaptured(bytes)`; a gallery pick skips the shutter flash/vibration but otherwise runs the identical pipeline below
+2. CameraX captures JPEG to temp file in `cacheDir`; on button press the preview flashes white (250 ms `Animatable` overlay) and the device vibrates (`vibrateShutter()`, `EFFECT_CLICK` on API 29+) as shutter feedback. A gallery pick instead reads the selected `Uri` via `ContentResolver` on `Dispatchers.IO`
 3. `MainViewModel.onImageCaptured(bytes)` increments `backgroundJobCount` and launches a background coroutine (camera stays open):
    - `fixImageOrientation(bytes, quality)` — reads EXIF rotation tag, physically rotates if needed
    - Resolves `TabConfig` from `activeTabIndex`, looks up `ProviderCredential` by provider name

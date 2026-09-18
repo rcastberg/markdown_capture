@@ -404,6 +404,7 @@ private fun TabSection(
     var fetchedModels   by remember(tab.providerName, matchedCredential?.apiKey) { mutableStateOf<List<ModelOption>?>(null) }
     var isLoadingModels by remember { mutableStateOf(false) }
     var modelsError     by remember { mutableStateOf<String?>(null) }
+    var showPromptBuilder by remember { mutableStateOf(false) }
 
     suspend fun doFetch() {
         val cred = matchedCredential ?: return
@@ -528,11 +529,28 @@ private fun TabSection(
             enabled       = !promptDisabled
         )
         if (!promptDisabled) {
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                TextButton(
+                    onClick = { showPromptBuilder = true },
+                    enabled = matchedCredential != null
+                ) {
+                    Text("Build with LLM")
+                }
                 TextButton(onClick = { onTabChange(tab.copy(systemPrompt = defaultPrompt)) }) {
                     Text("Reset to default")
                 }
             }
+        }
+
+        if (showPromptBuilder) {
+            PromptBuilderDialog(
+                tab           = tab,
+                credential    = matchedCredential,
+                models        = effectiveModels,
+                defaultPrompt = defaultPrompt,
+                onApply       = { onTabChange(tab.copy(systemPrompt = it)) },
+                onDismiss     = { showPromptBuilder = false }
+            )
         }
 
         OutlinedTextField(
@@ -546,6 +564,89 @@ private fun TabSection(
     }
 }
 
+// ── Prompt builder dialog ─────────────────────────────────────────────────────
+
+@Composable
+private fun PromptBuilderDialog(
+    tab: TabConfig,
+    credential: ProviderCredential?,
+    models: List<ModelOption>,
+    defaultPrompt: String,
+    onApply: (String) -> Unit,
+    onDismiss: () -> Unit
+) {
+    val coroutineScope = rememberCoroutineScope()
+
+    var selectedModel by remember { mutableStateOf(tab.model) }
+    var description   by remember { mutableStateOf("") }
+    var isGenerating   by remember { mutableStateOf(false) }
+    var error          by remember { mutableStateOf<String?>(null) }
+
+    AlertDialog(
+        onDismissRequest = { if (!isGenerating) onDismiss() },
+        title = { Text("Build prompt with LLM") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text(
+                    "Describe what you want this tab's notes to look like. The model will rewrite " +
+                    "the system prompt to do it.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                if (models.isNotEmpty()) {
+                    ModelDropdown(
+                        selectedModel = selectedModel,
+                        models        = models,
+                        label         = "Model",
+                        onSelect      = { selectedModel = it }
+                    )
+                }
+                OutlinedTextField(
+                    value         = description,
+                    onValueChange = { description = it },
+                    label         = { Text("What should this prompt do?") },
+                    placeholder   = { Text("e.g. focus on nutrition facts and list allergens") },
+                    modifier      = Modifier.fillMaxWidth().height(100.dp),
+                    maxLines      = 4,
+                    enabled       = !isGenerating
+                )
+                error?.let {
+                    Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                enabled = credential != null && description.isNotBlank() && !isGenerating,
+                onClick = {
+                    val cred = credential ?: return@TextButton
+                    isGenerating = true
+                    error = null
+                    coroutineScope.launch {
+                        val baseUrl = if (cred.providerName == "Custom") cred.customUrl
+                                      else providerByName(cred.providerName).baseUrl
+                        val current = tab.systemPrompt.ifBlank { defaultPrompt }
+                        runCatching {
+                            LlmClient.buildSystemPrompt(baseUrl, cred.apiKey, selectedModel, current, description)
+                        }.onSuccess {
+                            onApply(it)
+                            onDismiss()
+                        }.onFailure {
+                            error = it.message ?: "Failed to generate prompt"
+                        }
+                        isGenerating = false
+                    }
+                }
+            ) {
+                if (isGenerating) CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                else Text("Generate")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss, enabled = !isGenerating) { Text("Cancel") }
+        }
+    )
+}
 
 // ── Provider dropdown ─────────────────────────────────────────────────────────
 

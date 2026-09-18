@@ -10,6 +10,7 @@ import android.os.VibrationEffect
 import android.os.Vibrator
 import android.os.VibratorManager
 import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.camera.camera2.interop.Camera2CameraInfo
 import androidx.camera.core.Camera
@@ -33,6 +34,7 @@ import androidx.compose.material.icons.filled.FlashAuto
 import androidx.compose.material.icons.filled.FlashOff
 import androidx.compose.material.icons.filled.FlashOn
 import androidx.compose.material.icons.filled.History
+import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.PhotoLibrary
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.*
@@ -48,7 +50,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import org.castberg.markdowncapture.data.CaptureRecord
 import java.io.File
 
@@ -166,6 +170,18 @@ fun CameraScreen(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { permissions -> hasCameraPermission = permissions[Manifest.permission.CAMERA] == true }
 
+    val galleryLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.PickVisualMedia()
+    ) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        coroutineScope.launch {
+            val bytes = withContext(Dispatchers.IO) {
+                runCatching { context.contentResolver.openInputStream(uri)?.use { it.readBytes() } }.getOrNull()
+            }
+            if (bytes != null) onImageCaptured(bytes) else captureError = "Could not read selected image"
+        }
+    }
+
     LaunchedEffect(Unit) {
         val needed = buildList {
             if (!hasCameraPermission) add(Manifest.permission.CAMERA)
@@ -250,6 +266,13 @@ fun CameraScreen(
                                 },
                                 contentDescription = "Flash mode"
                             )
+                        }
+                        IconButton(onClick = {
+                            galleryLauncher.launch(
+                                PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                            )
+                        }) {
+                            Icon(Icons.Default.Image, contentDescription = "Choose from gallery")
                         }
                         BadgedBox(badge = {
                             if (backgroundJobCount > 0) Badge { Text("$backgroundJobCount") }

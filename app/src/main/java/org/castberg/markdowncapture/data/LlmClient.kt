@@ -154,6 +154,47 @@ object LlmClient {
         return sanitizeFilename(name) to body
     }
 
+    // ── Prompt builder ────────────────────────────────────────────────────────
+
+    private const val PROMPT_BUILDER_INSTRUCTIONS =
+        "You are an expert prompt engineer for a photo-capture app. Each tab in the app sends a " +
+        "photo to a vision LLM together with a system prompt, and saves the model's markdown " +
+        "response as an Obsidian note. Rewrite the system prompt given below so that it also does " +
+        "what the user describes. The rewritten prompt must still follow these rules: instruct the " +
+        "model to write well-structured markdown suited for an Obsidian note, use [[wikilinks]] for " +
+        "any concepts/people/places/topics worth linking, add a #tags section, and return only the " +
+        "markdown content itself — no JSON, no preamble, no code fences, no commentary. " +
+        "Respond with ONLY the full replacement system prompt text and nothing else — no quotes, " +
+        "no code fences, no explanation of what you changed."
+
+    suspend fun buildSystemPrompt(
+        baseUrl: String,
+        apiKey: String,
+        model: String,
+        currentPrompt: String,
+        userDescription: String
+    ): String {
+        val userMessage =
+            "Current system prompt:\n$currentPrompt\n\n" +
+            "What the user wants this prompt to do differently:\n$userDescription"
+
+        val body = JSONObject().apply {
+            put("model", model.ifBlank { "gpt-4o-mini" })
+            put("messages", JSONArray().apply {
+                put(JSONObject().apply {
+                    put("role", "system")
+                    put("content", PROMPT_BUILDER_INSTRUCTIONS)
+                })
+                put(JSONObject().apply {
+                    put("role", "user")
+                    put("content", userMessage)
+                })
+            })
+            put("max_tokens", 800)
+        }.toString()
+        return callApi(baseUrl, apiKey, body).trim().removeSurrounding("```").trim()
+    }
+
     // ── Mistral OCR ───────────────────────────────────────────────────────────
 
     suspend fun ocrImage(
