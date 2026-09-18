@@ -155,13 +155,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (credential.providerName == "Custom") credential.customUrl
         else providerByName(credential.providerName).baseUrl
 
-    private fun resolveFilenameCredential(s: AppSettings): ProviderCredential? {
-        val name = s.filenameProviderName.ifBlank { null }
-            ?: s.providerCredentials.firstOrNull()?.providerName
-            ?: return null
-        return resolveCredential(s, name)
-    }
-
     private fun defaultPromptForTab(tab: TabConfig) = when (tab.id) {
         "transcribe" -> LlmClient.DEFAULT_TRANSCRIBE_PROMPT
         "detail"     -> LlmClient.DEFAULT_ANALYSIS_PROMPT
@@ -234,6 +227,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 var hasError = false
                 var markdown = ""
                 var ocrImages: List<Pair<String, ByteArray>> = emptyList()
+                var extractedFilename: String? = null
 
                 if (tab.noLlm) {
                     val filename = LocalTime.now().format(DateTimeFormatter.ofPattern("HHmmss"))
@@ -267,14 +261,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         ocrImages = imgs
                     } else {
                         val prompt = tab.systemPrompt.ifBlank { defaultPromptForTab(tab) }
-                        markdown  = LlmClient.analyzeImages(baseUrl, credential.apiKey, corrected, tab.model, prompt, tab.maxTokens)
+                        val raw = LlmClient.analyzeImages(baseUrl, credential.apiKey, corrected, tab.model, prompt, tab.maxTokens)
+                        val (extracted, body) = LlmClient.extractFilename(raw)
+                        markdown = body
+                        extractedFilename = extracted
                     }
                 } catch (e: Exception) {
                     markdown = "> Analysis failed: ${e.message}"
                     hasError = true
                 }
 
-                val filename = try { generateFilename(s, markdown) } catch (_: Exception) { "captured-${System.currentTimeMillis()}" }
+                val filename = extractedFilename ?: fallbackFilename(markdown)
                 val baseName = saveMultipleFiles(corrected, filename, markdown, s, location, ocrImages, tab.model)
 
                 settingsRepo.addRecord(CaptureRecord(
@@ -368,6 +365,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         var hasError = false
         var markdown = ""
         var ocrImages: List<Pair<String, ByteArray>> = emptyList()
+        var extractedFilename: String? = null
 
         try {
             if (isMistralOcr(tab.model)) {
@@ -376,7 +374,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 ocrImages = result.extractedImages
             } else {
                 val prompt = tab.systemPrompt.ifBlank { defaultPromptForTab(tab) }
-                markdown  = LlmClient.analyzeImage(baseUrl, credential.apiKey, corrected, tab.model, prompt, tab.maxTokens)
+                val raw = LlmClient.analyzeImage(baseUrl, credential.apiKey, corrected, tab.model, prompt, tab.maxTokens)
+                val (extracted, body) = LlmClient.extractFilename(raw)
+                markdown = body
+                extractedFilename = extracted
             }
         } catch (e: Exception) {
             markdown = "> Analysis failed: ${e.message}"
@@ -384,7 +385,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
 
         onProgress("Naming document…")
-        val filename = try { generateFilename(s, markdown) } catch (_: Exception) { "captured-${System.currentTimeMillis()}" }
+        val filename = extractedFilename ?: fallbackFilename(markdown)
 
         onProgress("Saving…")
         val baseName = saveFiles(corrected, filename, markdown, s, location, ocrImages, tab.model)
@@ -394,14 +395,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     // ── File helpers ──────────────────────────────────────────────────────────
 
-    private suspend fun generateFilename(s: AppSettings, markdown: String): String {
-        val cred = resolveFilenameCredential(s) ?: return "captured-${System.currentTimeMillis()}"
-        return LlmClient.generateFilename(
-            resolveBaseUrl(cred),
-            cred.apiKey,
-            s.filenameModel.ifBlank { "gpt-4o-mini" },
-            markdown
-        )
+    /** Used when the model didn't include a "FILENAME:" line (e.g. Mistral OCR, which
+     *  takes no custom instructions, or a model that ignored the request). */
+    private fun fallbackFilename(markdown: String): String {
+        val heading = markdown.lineSequence()
+            .firstOrNull { it.isNotBlank() }
+            ?.trimStart('#', ' ')
+            .orEmpty()
+        return heading.takeIf { it.isNotBlank() }
+            ?.let { LlmClient.sanitizeFilename(it) }
+            ?: "captured-${System.currentTimeMillis()}"
     }
 
     private suspend fun fixImageOrientation(bytes: ByteArray, quality: Int): ByteArray =

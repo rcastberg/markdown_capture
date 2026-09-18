@@ -16,8 +16,6 @@ class SettingsRepository(private val context: Context) {
     private object Keys {
         val CREDENTIALS        = stringPreferencesKey("credentials")
         val TABS               = stringPreferencesKey("tabs")
-        val FILENAME_PROVIDER  = stringPreferencesKey("filename_provider")
-        val FILENAME_MODEL     = stringPreferencesKey("filename_model")
         val DEFAULT_TAB        = intPreferencesKey("default_tab")
         val OUTPUT_FOLDER_URI  = stringPreferencesKey("output_folder_uri")
         val IMAGE_QUALITY      = intPreferencesKey("image_quality")
@@ -38,6 +36,11 @@ class SettingsRepository(private val context: Context) {
         val OLD_CAPTURE_TAB    = stringPreferencesKey("capture_tab")
         val OLD_DETAIL_TAB     = stringPreferencesKey("detail_tab")
         val OLD_TRANSCRIBE_TAB = stringPreferencesKey("transcribe_tab")
+
+        // Removed: dedicated filename-model settings (filename is now generated inline
+        // by the analysis call itself; see LlmClient.extractFilename)
+        val L_FILENAME_PROVIDER = stringPreferencesKey("filename_provider")
+        val L_FILENAME_MODEL    = stringPreferencesKey("filename_model")
     }
 
     // ── Serialisation ─────────────────────────────────────────────────────────
@@ -126,7 +129,6 @@ class SettingsRepository(private val context: Context) {
                 val legacyUrl   = prefs[Keys.L_LLM_URL] ?: ""
                 val highModel   = prefs[Keys.L_HIGH_MODEL]    ?: "gpt-4o"
                 val medModel    = prefs[Keys.L_MEDIUM_MODEL]  ?: "gpt-4o-mini"
-                val lowModel    = prefs[Keys.L_LOW_MODEL]     ?: "gpt-4o-mini"
                 val highPrompt  = prefs[Keys.L_SYSTEM_PROMPT] ?: ""
                 val medPrompt   = prefs[Keys.L_MEDIUM_PROMPT] ?: ""
                 val defaultHigh = prefs[Keys.L_DEFAULT_HIGH]  ?: true
@@ -141,8 +143,6 @@ class SettingsRepository(private val context: Context) {
                         DEFAULT_TABS[1].copy(providerName = legacyProvider, model = highModel, systemPrompt = highPrompt),
                         DEFAULT_TABS[2]
                     ),
-                    filenameProviderName = legacyProvider,
-                    filenameModel        = lowModel,
                     defaultTab           = if (defaultHigh) 1 else 0,
                     outputFolderUri      = prefs[Keys.OUTPUT_FOLDER_URI] ?: "",
                     imageQuality         = prefs[Keys.IMAGE_QUALITY] ?: 85
@@ -158,8 +158,6 @@ class SettingsRepository(private val context: Context) {
                         tabFromJsonOld(oldDetailTab ?: "",                  DEFAULT_TABS[1]),
                         tabFromJsonOld(prefs[Keys.OLD_TRANSCRIBE_TAB] ?: "", DEFAULT_TABS[2])
                     ),
-                    filenameProviderName = prefs[Keys.FILENAME_PROVIDER] ?: "",
-                    filenameModel        = prefs[Keys.FILENAME_MODEL]    ?: "gpt-4o-mini",
                     defaultTab           = prefs[Keys.DEFAULT_TAB]       ?: 0,
                     outputFolderUri      = prefs[Keys.OUTPUT_FOLDER_URI] ?: "",
                     imageQuality         = prefs[Keys.IMAGE_QUALITY]     ?: 85
@@ -170,8 +168,6 @@ class SettingsRepository(private val context: Context) {
             else -> AppSettings(
                 providerCredentials  = credentialsFromJson(prefs[Keys.CREDENTIALS] ?: "[]"),
                 tabs                 = tabsFromJson(prefs[Keys.TABS] ?: ""),
-                filenameProviderName = prefs[Keys.FILENAME_PROVIDER] ?: "",
-                filenameModel        = prefs[Keys.FILENAME_MODEL]    ?: "gpt-4o-mini",
                 defaultTab           = prefs[Keys.DEFAULT_TAB]       ?: 0,
                 outputFolderUri      = prefs[Keys.OUTPUT_FOLDER_URI] ?: "",
                 imageQuality         = prefs[Keys.IMAGE_QUALITY]     ?: 85
@@ -192,8 +188,6 @@ class SettingsRepository(private val context: Context) {
         context.dataStore.edit { prefs ->
             prefs[Keys.CREDENTIALS]       = credentialsToJson(settings.providerCredentials)
             prefs[Keys.TABS]              = tabsToJson(settings.tabs)
-            prefs[Keys.FILENAME_PROVIDER] = settings.filenameProviderName
-            prefs[Keys.FILENAME_MODEL]    = settings.filenameModel
             prefs[Keys.DEFAULT_TAB]       = settings.defaultTab
             prefs[Keys.OUTPUT_FOLDER_URI] = settings.outputFolderUri
             prefs[Keys.IMAGE_QUALITY]     = settings.imageQuality
@@ -210,6 +204,8 @@ class SettingsRepository(private val context: Context) {
             prefs.remove(Keys.L_LOW_MODEL)
             prefs.remove(Keys.L_SYSTEM_PROMPT)
             prefs.remove(Keys.L_MEDIUM_PROMPT)
+            prefs.remove(Keys.L_FILENAME_PROVIDER)
+            prefs.remove(Keys.L_FILENAME_MODEL)
         }
     }
 

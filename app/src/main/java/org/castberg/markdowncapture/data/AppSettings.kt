@@ -25,8 +25,6 @@ val DEFAULT_TABS = listOf(
 data class AppSettings(
     val providerCredentials: List<ProviderCredential> = emptyList(),
     val tabs: List<TabConfig> = DEFAULT_TABS,
-    val filenameProviderName: String = "",
-    val filenameModel: String = "gpt-4o-mini",
     val defaultTab: Int = 0,
     val outputFolderUri: String = "",
     val imageQuality: Int = 85

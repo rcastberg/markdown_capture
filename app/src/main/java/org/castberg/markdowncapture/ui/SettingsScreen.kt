@@ -47,8 +47,6 @@ fun SettingsScreen(
 
     var credentials     by remember(settings.providerCredentials) { mutableStateOf(settings.providerCredentials) }
     var tabs            by remember(settings.tabs)                { mutableStateOf(settings.tabs) }
-    var filenameProvider by remember(settings.filenameProviderName) { mutableStateOf(settings.filenameProviderName) }
-    var filenameModel   by remember(settings.filenameModel)       { mutableStateOf(settings.filenameModel) }
     var defaultTab      by remember(settings.defaultTab)          { mutableStateOf(settings.defaultTab) }
     var outputFolderUri by remember(settings.outputFolderUri)     { mutableStateOf(settings.outputFolderUri) }
     var imageQuality    by remember(settings.imageQuality)        { mutableStateOf(settings.imageQuality.toFloat()) }
@@ -58,8 +56,6 @@ fun SettingsScreen(
     fun buildSettings() = AppSettings(
         providerCredentials  = credentials,
         tabs                 = tabs,
-        filenameProviderName = filenameProvider,
-        filenameModel        = filenameModel,
         defaultTab           = defaultTab,
         outputFolderUri      = outputFolderUri,
         imageQuality         = imageQuality.toInt()
@@ -167,23 +163,6 @@ fun SettingsScreen(
                 Spacer(Modifier.width(8.dp))
                 Text("Add Tab")
             }
-
-            // ── Filename model ────────────────────────────────────────────────
-            HorizontalDivider()
-            Text("Filename Model", style = MaterialTheme.typography.titleMedium)
-            Text(
-                "Used to generate kebab-case filenames from note content",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-
-            FilenameModelSection(
-                credentials       = credentials,
-                providerName      = filenameProvider,
-                model             = filenameModel,
-                onProviderChange  = { filenameProvider = it },
-                onModelChange     = { filenameModel = it }
-            )
 
             // ── General ───────────────────────────────────────────────────────
             HorizontalDivider()
@@ -567,95 +546,6 @@ private fun TabSection(
     }
 }
 
-// ── Filename model section ────────────────────────────────────────────────────
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun FilenameModelSection(
-    credentials: List<ProviderCredential>,
-    providerName: String,
-    model: String,
-    onProviderChange: (String) -> Unit,
-    onModelChange: (String) -> Unit
-) {
-    val coroutineScope = rememberCoroutineScope()
-    val matchedCredential = credentials.find { it.providerName == providerName }
-
-    var fetchedModels   by remember(providerName, matchedCredential?.apiKey) { mutableStateOf<List<ModelOption>?>(null) }
-    var isLoadingModels by remember { mutableStateOf(false) }
-
-    suspend fun doFetch() {
-        val cred = matchedCredential ?: return
-        if (cred.providerName == "Custom") return
-        isLoadingModels = true
-        fetchedModels   = null
-        runCatching {
-            val url = providerByName(cred.providerName).baseUrl
-            LlmClient.fetchModels(url, cred.apiKey, cred.providerName)
-        }.onSuccess { fetchedModels = it }.onFailure {}
-        isLoadingModels = false
-    }
-
-    LaunchedEffect(providerName, matchedCredential?.apiKey) { doFetch() }
-
-    val effectiveModels = when {
-        matchedCredential?.providerName == "Custom" -> emptyList()
-        fetchedModels != null -> fetchedModels!!
-        else -> providerByName(providerName).models
-    }
-
-    if (credentials.isEmpty()) {
-        Text(
-            "Add providers in the API Keys section above",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-    } else {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.End
-        ) {
-            if (isLoadingModels) {
-                CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
-            } else if (matchedCredential != null && matchedCredential.providerName != "Custom") {
-                IconButton(
-                    onClick  = { coroutineScope.launch { doFetch() } },
-                    modifier = Modifier.size(36.dp)
-                ) {
-                    Icon(Icons.Default.Refresh, contentDescription = "Refresh models", modifier = Modifier.size(20.dp))
-                }
-            }
-        }
-
-        ProviderDropdown(
-            credentials = credentials,
-            selected    = providerName,
-            onSelect    = {
-                onProviderChange(it)
-                onModelChange(providerByName(it).models.firstOrNull()?.id ?: model)
-            }
-        )
-
-        if (effectiveModels.isNotEmpty()) {
-            ModelDropdown(
-                selectedModel = model,
-                models        = effectiveModels,
-                label         = "Filename Model",
-                onSelect      = onModelChange
-            )
-        } else {
-            OutlinedTextField(
-                value         = model,
-                onValueChange = onModelChange,
-                label         = { Text("Filename Model ID") },
-                placeholder   = { Text("e.g. gpt-4o-mini") },
-                modifier      = Modifier.fillMaxWidth(),
-                singleLine    = true
-            )
-        }
-    }
-}
 
 // ── Provider dropdown ─────────────────────────────────────────────────────────
 

@@ -19,7 +19,7 @@ MainActivity
 
 **Screens** (sealed class `MainViewModel.Screen`):
 - `Camera` — live camera preview, capture button, zoom/lens controls, filled tab row (one tab per configured `TabConfig`)
-- `Settings` — provider API keys (multi-provider), add/remove/rename tabs with per-tab model/prompt/token config, filename model, general
+- `Settings` — provider API keys (multi-provider), add/remove/rename tabs with per-tab model/prompt/token config, general
 - `Processing` — progress indicator (used only for `resubmit`; normal captures run in background)
 - `ViewCapture` — rendered markdown view of a saved capture record (inline images, share as MD/PDF)
 - `Error` — shows file errors with retry/retake options (only from `resubmit`)
@@ -36,7 +36,7 @@ MainActivity
 | `data/ProviderConfig.kt` | Provider/model catalogue (OpenAI, OpenRouter, Google, Mistral, Custom) |
 | `data/CaptureRecord.kt` | Capture history entry (serialised to/from JSON) |
 | `ui/CameraScreen.kt` | Camera preview, filled tab row + HorizontalPager, pinch-zoom, lens+zoom group, shutter feedback |
-| `ui/SettingsScreen.kt` | API Keys section, per-tab sections, filename model, general settings |
+| `ui/SettingsScreen.kt` | API Keys section, per-tab sections, general settings |
 | `ui/ProcessingScreen.kt` | Spinner with step label |
 | `ui/ResultScreen.kt` | `CaptureDetailScreen` — rendered/raw toggle, share as MD and PDF |
 | `ui/MarkdownViewer.kt` | `parseMarkdown`, `RenderedMarkdown` composable, SAF image loader |
@@ -126,9 +126,9 @@ Camera is requested together with `ACCESS_COARSE_LOCATION` **and** `ACCESS_FINE_
    - Resolves `TabConfig` from `activeTabIndex`, looks up `ProviderCredential` by provider name
    - `noLlm` tabs skip the LLM entirely and use a `HHmmss` timestamp as the filename
    - **TRANSCRIBE + `mistral-ocr-latest`**: `LlmClient.ocrImage()` → `OcrResult`
-   - **Other modes**: `LlmClient.analyzeImage(baseUrl, apiKey, bytes, model, prompt, maxTokens)` → markdown
+   - **Other modes**: `LlmClient.analyzeImage(baseUrl, apiKey, bytes, model, prompt, maxTokens)` → markdown. The system prompt sent to the model has `LlmClient`'s `FILENAME_LINE_INSTRUCTION` appended (invisibly — it's not part of the tab's editable prompt text), asking it to prefix its response with a `FILENAME: <kebab-case-name>` line before the note itself. `LlmClient.extractFilename(raw)` strips that line and returns `(filename, markdown)` — so the name comes from the model actually looking at the image, in the same call, at no extra cost
    - LLM errors are caught: fallback markdown `"> Analysis failed: …"` is used, `hasError = true`
-   - `LlmClient.generateFilename(baseUrl, apiKey, model, markdown)` → kebab-case name
+   - If no `FILENAME:` line was returned (model ignored it, or a **Mistral OCR** capture, whose `/ocr` endpoint takes no custom instructions), `MainViewModel.fallbackFilename()` slugifies the note's first heading locally — no extra LLM call
    - `getLastKnownLocation()` → GPS coordinates
    - `reverseGeocode()` → human-readable address via Nominatim
    - `saveFiles()` → picks a unique base name via `uniqueBaseName()` (`-2`, `-3`, … suffix if `{date}-{name}.md` or its `_resources` folder already exists — SAF would otherwise silently create `name (1).md` pointing at the wrong resources), then writes image + OCR extracted images + markdown with YAML frontmatter (always runs, even on LLM error)
@@ -146,7 +146,7 @@ Camera is requested together with `ACCESS_COARSE_LOCATION` **and** `ACCESS_FINE_
 ## Persistence
 
 **DataStore Preferences** keys (`SettingsRepository.kt`):
-`credentials` (JSON array of `ProviderCredential`), `tabs` (JSON array of `TabConfig`), `filename_provider`, `filename_model`, `default_tab`, `output_folder_uri`, `image_quality`, `history` (JSON array)
+`credentials` (JSON array of `ProviderCredential`), `tabs` (JSON array of `TabConfig`), `default_tab`, `output_folder_uri`, `image_quality`, `history` (JSON array)
 
 Two older layouts are migrated on read and their keys removed on the next save: the flat keys (`provider_name`, `api_key`, `high_effort_model`, …) from very old installs, and the fixed 3-tab keys (`capture_tab`, `detail_tab`, `transcribe_tab`).
 

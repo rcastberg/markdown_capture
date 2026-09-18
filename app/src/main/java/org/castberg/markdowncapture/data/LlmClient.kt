@@ -52,10 +52,11 @@ object LlmClient {
         "- Add a #tags section at the bottom\n" +
         "Return only the markdown content — no JSON, no preamble, no code fences."
 
-    private const val FILENAME_PROMPT =
-        "Generate a short filename for the following note. " +
-        "Rules: lowercase kebab-case, max 50 characters, only letters/numbers/hyphens, no extension. " +
-        "Respond with ONLY the filename — no explanation, no punctuation, nothing else."
+    private const val FILENAME_LINE_INSTRUCTION =
+        "\n\nBefore the note itself, output exactly one line in the form " +
+        "\"FILENAME: <name>\" where <name> is a short, lowercase, kebab-case filename " +
+        "(max 50 characters, only letters/numbers/hyphens, no extension) describing the " +
+        "main subject of the image. Then leave a blank line, then write the note as instructed above."
 
     // ── Analysis ──────────────────────────────────────────────────────────────
 
@@ -73,7 +74,7 @@ object LlmClient {
             put("messages", JSONArray().apply {
                 put(JSONObject().apply {
                     put("role", "system")
-                    put("content", systemPrompt)
+                    put("content", systemPrompt + FILENAME_LINE_INSTRUCTION)
                 })
                 put(JSONObject().apply {
                     put("role", "user")
@@ -120,7 +121,7 @@ object LlmClient {
             put("messages", JSONArray().apply {
                 put(JSONObject().apply {
                     put("role", "system")
-                    put("content", systemPrompt)
+                    put("content", systemPrompt + FILENAME_LINE_INSTRUCTION)
                 })
                 put(JSONObject().apply {
                     put("role", "user")
@@ -130,6 +131,27 @@ object LlmClient {
             put("max_tokens", maxTokens)
         }.toString()
         return callApi(baseUrl, apiKey, body)
+    }
+
+    /**
+     * Splits a leading "FILENAME: <name>" line off the model's response.
+     * Returns the sanitized name (or null if the model didn't include one) and the
+     * remaining note body with that line and the following blank line stripped.
+     */
+    fun extractFilename(raw: String): Pair<String?, String> {
+        val lines = raw.lines()
+        val firstIdx = lines.indexOfFirst { it.isNotBlank() }
+        if (firstIdx == -1) return null to raw
+
+        val match = Regex("^FILENAME:\\s*(.*)$", RegexOption.IGNORE_CASE)
+            .find(lines[firstIdx].trim())
+            ?: return null to raw
+
+        val name = match.groupValues[1].trim()
+        if (name.isBlank()) return null to raw
+
+        val body = lines.drop(firstIdx + 1).dropWhile { it.isBlank() }.joinToString("\n")
+        return sanitizeFilename(name) to body
     }
 
     // ── Mistral OCR ───────────────────────────────────────────────────────────
@@ -190,31 +212,6 @@ object LlmClient {
             markdown        = markdownParts.joinToString("\n\n"),
             extractedImages = extractedImages
         )
-    }
-
-    // ── Filename ──────────────────────────────────────────────────────────────
-
-    suspend fun generateFilename(
-        baseUrl: String,
-        apiKey: String,
-        model: String,
-        markdown: String
-    ): String {
-        val body = JSONObject().apply {
-            put("model", model.ifBlank { "gpt-4o-mini" })
-            put("messages", JSONArray().apply {
-                put(JSONObject().apply {
-                    put("role", "system")
-                    put("content", FILENAME_PROMPT)
-                })
-                put(JSONObject().apply {
-                    put("role", "user")
-                    put("content", markdown.take(1500))
-                })
-            })
-            put("max_tokens", 30)
-        }.toString()
-        return sanitizeFilename(callApi(baseUrl, apiKey, body))
     }
 
     // ── Model discovery ───────────────────────────────────────────────────────
@@ -328,7 +325,7 @@ object LlmClient {
                 .trim()
         }
 
-    private fun sanitizeFilename(name: String): String =
+    fun sanitizeFilename(name: String): String =
         name.trim()
             .lowercase()
             .replace(Regex("[^a-z0-9-]"), "-")
