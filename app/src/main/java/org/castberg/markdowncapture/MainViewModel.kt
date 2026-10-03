@@ -96,7 +96,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             delay(2 * 60 * 1000L)
             // Never close the app while a capture is still being processed — finishing
             // clears the ViewModel and cancels the in-flight job, losing the photo.
-            while (backgroundJobCount > 0) delay(5_000L)
+            while (!canAutoClose) delay(5_000L)
             _finishEvent.emit(Unit)
         }
     }
@@ -121,6 +121,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         private set
 
     private val _pendingImages = mutableListOf<ByteArray>()
+
+    /**
+     * Whether the app may close itself (screen-off or inactivity). Only from the bare
+     * camera screen with nothing in flight: finishing clears the ViewModel, which would
+     * cancel a running capture/resubmit, drop unsent multi-mode photos, or yank away a
+     * note or error message the user is still reading.
+     */
+    val canAutoClose: Boolean
+        get() = screen is Screen.Camera && backgroundJobCount == 0 && pendingImageCount == 0
 
     fun toggleMultiMode() {
         isMultiMode = !isMultiMode
@@ -161,11 +170,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         else         -> LlmClient.DEFAULT_MEDIUM_ANALYSIS_PROMPT
     }
 
-    private fun currentTab(s: AppSettings): TabConfig =
-        s.tabs.getOrElse(activeTabIndex) { s.tabs.firstOrNull() ?: DEFAULT_TABS[0] }
-
     private fun tabAt(s: AppSettings, index: Int): TabConfig =
         s.tabs.getOrElse(index) { s.tabs.firstOrNull() ?: DEFAULT_TABS[0] }
+
+    /** Image names written by [saveMultipleFiles]: "image-1.jpg", "image-2.jpg", … */
+    private val MULTI_IMAGE_NAME = Regex("image-(\\d+)\\.jpg")
 
     // ── Single capture ────────────────────────────────────────────────────────
 
@@ -222,57 +231,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 val s = settings.value
                 val corrected = images.map { fixImageOrientation(it, s.imageQuality) }
 
-                val tab = currentTab(s)
-
-                var hasError = false
-                var markdown = ""
-                var ocrImages: List<Pair<String, ByteArray>> = emptyList()
-                var extractedFilename: String? = null
-
-                if (tab.noLlm) {
-                    val filename = LocalTime.now().format(DateTimeFormatter.ofPattern("HHmmss"))
-                    val baseName = saveMultipleFiles(corrected, filename, "", s, location)
-                    settingsRepo.addRecord(CaptureRecord(
-                        id        = System.currentTimeMillis().toString(),
-                        baseName  = baseName,
-                        markdown  = "",
-                        timestamp = System.currentTimeMillis(),
-                        folderUri = s.outputFolderUri,
-                        hasError  = false
-                    ))
-                    saveMessage = "Saved: $baseName"
-                    startInactivityTimer()
-                    return@launch
-                }
-
-                val credential = resolveCredential(s, tab.providerName)
-                val baseUrl    = resolveBaseUrl(credential)
-
-                try {
-                    if (isMistralOcr(tab.model)) {
-                        val parts = mutableListOf<String>()
-                        val imgs  = mutableListOf<Pair<String, ByteArray>>()
-                        corrected.forEach { bytes ->
-                            val result = LlmClient.ocrImage(baseUrl, credential.apiKey, bytes)
-                            parts.add(result.markdown)
-                            imgs.addAll(result.extractedImages)
-                        }
-                        markdown  = parts.joinToString("\n\n---\n\n")
-                        ocrImages = imgs
-                    } else {
-                        val prompt = tab.systemPrompt.ifBlank { defaultPromptForTab(tab) }
-                        val raw = LlmClient.analyzeImages(baseUrl, credential.apiKey, corrected, tab.model, prompt, tab.maxTokens)
-                        val (extracted, body) = LlmClient.extractFilename(raw)
-                        markdown = body
-                        extractedFilename = extracted
-                    }
-                } catch (e: Exception) {
-                    markdown = "> Analysis failed: ${e.message}"
-                    hasError = true
-                }
-
-                val filename = extractedFilename ?: fallbackFilename(markdown)
-                val baseName = saveMultipleFiles(corrected, filename, markdown, s, location, ocrImages, tab.model)
+                val (baseName, markdown, hasError) = processAndSaveMultipleImages(corrected, activeTabIndex, s, location)
 
                 settingsRepo.addRecord(CaptureRecord(
                     id        = System.currentTimeMillis().toString(),
@@ -298,6 +257,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun resubmit(record: CaptureRecord, tabIndex: Int) {
         cancelInactivityTimer()
         val location = getLastKnownLocation()
+        backgroundJobCount++
         viewModelScope.launch {
             runCatching {
                 val context: Context = getApplication()
@@ -309,19 +269,31 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 } ?: error("Cannot access folder")
                 val noteDir = folder.findFile("_resources")?.findFile(record.baseName)
                     ?: error("Resources folder not found")
-                val imageFile = noteDir.findFile("image.jpg") ?: error("Image not found")
-                val bytes = withContext(Dispatchers.IO) {
-                    context.contentResolver.openInputStream(imageFile.uri)?.use { it.readBytes() }
-                } ?: error("Cannot read image")
+                // Single captures save "image.jpg"; multi-image captures save
+                // "image-1.jpg", "image-2.jpg", … (see saveFiles / saveMultipleFiles).
+                val imageFiles = noteDir.findFile("image.jpg")?.let { listOf(it) }
+                    ?: noteDir.listFiles()
+                        .mapNotNull { f -> MULTI_IMAGE_NAME.matchEntire(f.name ?: "")?.let { it.groupValues[1].toInt() to f } }
+                        .sortedBy { it.first }
+                        .map { it.second }
+                if (imageFiles.isEmpty()) error("Image not found")
+                val images = withContext(Dispatchers.IO) {
+                    imageFiles.map { file ->
+                        context.contentResolver.openInputStream(file.uri)?.use { it.readBytes() }
+                            ?: error("Cannot read ${file.name}")
+                    }
+                }
 
-                screen = Screen.Processing("Analyzing image…")
-                val corrected = fixImageOrientation(bytes, s.imageQuality)
-                lastImageBytes = corrected
+                screen = Screen.Processing(if (images.size > 1) "Analyzing ${images.size} images…" else "Analyzing image…")
+                val corrected = images.map { fixImageOrientation(it, s.imageQuality) }
+                lastImageBytes = corrected.first()
 
-                val (baseName, markdown, hasError) = processAndSaveSingleImage(
-                    corrected, tabIndex, s, location,
-                    onProgress = { step -> screen = Screen.Processing(step) }
-                )
+                val onProgress = { step: String -> screen = Screen.Processing(step) }
+                val (baseName, markdown, hasError) = if (corrected.size == 1) {
+                    processAndSaveSingleImage(corrected.first(), tabIndex, s, location, onProgress)
+                } else {
+                    processAndSaveMultipleImages(corrected, tabIndex, s, location, onProgress)
+                }
 
                 settingsRepo.addRecord(CaptureRecord(
                     id        = System.currentTimeMillis().toString(),
@@ -338,6 +310,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }.onFailure { e ->
                 screen = Screen.Error(e.message ?: "Unknown error", lastImageBytes)
             }
+            backgroundJobCount--
         }
     }
 
@@ -389,6 +362,63 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
         onProgress("Saving…")
         val baseName = saveFiles(corrected, filename, markdown, s, location, ocrImages, tab.model)
+
+        return Triple(baseName, markdown, hasError)
+    }
+
+    // ── Common multi-image processing ─────────────────────────────────────────
+
+    private suspend fun processAndSaveMultipleImages(
+        corrected: List<ByteArray>,
+        tabIndex: Int,
+        s: AppSettings,
+        location: LocationData?,
+        onProgress: (String) -> Unit = {}
+    ): Triple<String, String, Boolean> {
+        val tab = tabAt(s, tabIndex)
+
+        if (tab.noLlm) {
+            val filename = LocalTime.now().format(DateTimeFormatter.ofPattern("HHmmss"))
+            onProgress("Saving…")
+            val baseName = saveMultipleFiles(corrected, filename, "", s, location)
+            return Triple(baseName, "", false)
+        }
+
+        val credential = resolveCredential(s, tab.providerName)
+        val baseUrl    = resolveBaseUrl(credential)
+
+        var hasError = false
+        var markdown = ""
+        var ocrImages: List<Pair<String, ByteArray>> = emptyList()
+        var extractedFilename: String? = null
+
+        try {
+            if (isMistralOcr(tab.model)) {
+                val parts = mutableListOf<String>()
+                val imgs  = mutableListOf<Pair<String, ByteArray>>()
+                corrected.forEach { bytes ->
+                    val result = LlmClient.ocrImage(baseUrl, credential.apiKey, bytes)
+                    parts.add(result.markdown)
+                    imgs.addAll(result.extractedImages)
+                }
+                markdown  = parts.joinToString("\n\n---\n\n")
+                ocrImages = imgs
+            } else {
+                val prompt = tab.systemPrompt.ifBlank { defaultPromptForTab(tab) }
+                val raw = LlmClient.analyzeImages(baseUrl, credential.apiKey, corrected, tab.model, prompt, tab.maxTokens)
+                val (extracted, body) = LlmClient.extractFilename(raw)
+                markdown = body
+                extractedFilename = extracted
+            }
+        } catch (e: Exception) {
+            markdown = "> Analysis failed: ${e.message}"
+            hasError = true
+        }
+
+        val filename = extractedFilename ?: fallbackFilename(markdown)
+
+        onProgress("Saving…")
+        val baseName = saveMultipleFiles(corrected, filename, markdown, s, location, ocrImages, tab.model)
 
         return Triple(baseName, markdown, hasError)
     }

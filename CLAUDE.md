@@ -139,7 +139,9 @@ Camera is requested together with `ACCESS_COARSE_LOCATION` **and** `ACCESS_FINE_
 4. Record persisted to DataStore history (last 20 entries); `hasError` flag set on LLM failure
 5. `backgroundJobCount` decremented in `finally`; a toast confirms save or reports file error
 
-`backgroundJobCount` is shown as a badge on the history icon in `CameraScreen`. It also gates auto-close: `MainActivity.onStop` only calls `finish()` on screen-off, and the 2-minute inactivity timer only emits `finishEvent`, when no job is running — finishing clears the ViewModel and would cancel the in-flight coroutine, losing the photo.
+`backgroundJobCount` is shown as a badge on the history icon in `CameraScreen`. Auto-close (`MainActivity.onStop` calling `finish()` on screen-off, and the 2-minute inactivity timer emitting `finishEvent`) is gated on `MainViewModel.canAutoClose`: only on the `Camera` screen, with no background job (captures **and** `resubmit` count), and no unsent multi-mode photos. Finishing clears the ViewModel, which would cancel an in-flight coroutine (losing the photo), drop pending images, or close a note/error the user is reading.
+
+**Resubmit** (`MainViewModel.resubmit`, from the capture detail screen) reloads the capture's images from its `_resources` folder: `image.jpg` for a single capture, otherwise every `image-N.jpg` in numeric order. One image goes through `processAndSaveSingleImage`; several go through `processAndSaveMultipleImages`, the same helper `onSendMultiImages` uses, so a multi-image capture is resubmitted as one multi-image request. Before this, resubmit looked only for `image.jpg` and failed with "Image not found" on any multi-image capture.
 
 **File layout on disk:**
 - `{output_folder}/{date}-{name}.md`
